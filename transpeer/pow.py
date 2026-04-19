@@ -1,0 +1,156 @@
+"""EquiX proof-of-work wrapper using ctypes."""
+
+import ctypes
+import hashlib
+import os
+import struct
+import time
+from pathlib import Path
+
+# EquiX constants
+EQUIX_MAX_SOLS = 8
+EQUIX_SOLUTION_SIZE = 16  # 8 x uint16_t
+EQUIX_OK = 0
+EQUIX_CTX_SOLVE = 1
+EQUIX_CTX_VERIFY = 2
+
+# Locate the shared library
+_LIB_SEARCH_PATHS = [
+    Path(__file__).parent.parent / "equix" / "libequix.so",
+    Path("/usr/local/lib/libequix.so"),
+    Path("/usr/lib/libequix.so"),
+]
+
+_lib = None
+
+
+class EquixSolution(ctypes.Structure):
+    _fields_ = [("idx", ctypes.c_uint16 * 8)]
+
+
+def _load_lib():
+    global _lib
+    if _lib is not None:
+        return _lib
+
+    for path in _LIB_SEARCH_PATHS:
+        if path.exists():
+            _lib = ctypes.CDLL(str(path))
+            _setup_bindings(_lib)
+            return _lib
+
+    raise RuntimeError(
+        "libequix.so not found. Run: python equix/build.py"
+    )
+
+
+def _setup_bindings(lib):
+    lib.equix_alloc.argtypes = [ctypes.c_int]
+    lib.equix_alloc.restype = ctypes.c_void_p
+
+    lib.equix_free.argtypes = [ctypes.c_void_p]
+    lib.equix_free.restype = None
+
+    lib.equix_solve.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.c_size_t,
+        ctypes.POINTER(EquixSolution),
+    ]
+    lib.equix_solve.restype = ctypes.c_int
+
+    lib.equix_verify.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.c_size_t,
+        ctypes.POINTER(EquixSolution),
+    ]
+    lib.equix_verify.restype = ctypes.c_int
+
+
+def build_challenge(network: str, addr: str, port: int, timestamp_bucket: int | None = None) -> bytes:
+    if timestamp_bucket is None:
+        timestamp_bucket = int(time.time()) // 21600
+    data = f"{network}:{addr}:{port}:{timestamp_bucket}".encode()
+    return hashlib.blake2b(data, digest_size=32).digest()
+
+
+def _check_difficulty(challenge: bytes, nonce: bytes, solution_bytes: bytes, effort: int) -> bool:
+    h = hashlib.blake2b(challenge + nonce + solution_bytes, digest_size=4).digest()
+    r = struct.unpack("<I", h)[0]
+    return r * effort <= 0xFFFFFFFF
+
+
+def _solution_to_bytes(sol: EquixSolution) -> bytes:
+    return bytes(ctypes.cast(sol.idx, ctypes.POINTER(ctypes.c_uint8 * 16)).contents)
+
+
+def _bytes_to_solution(data: bytes) -> EquixSolution:
+    sol = EquixSolution()
+    ctypes.memmove(sol.idx, data, 16)
+    return sol
+
+
+def solve(network: str, addr: str, port: int, effort: int) -> tuple[bytes, bytes, int]:
+    """Solve an EquiX puzzle for a peer entry.
+
+    Returns (nonce, solution_bytes, timestamp_bucket).
+    """
+    lib = _load_lib()
+    ctx = lib.equix_alloc(EQUIX_CTX_SOLVE)
+    if not ctx:
+        raise RuntimeError("Failed to allocate EquiX solve context")
+
+    try:
+        timestamp_bucket = int(time.time()) // 21600
+        challenge = build_challenge(network, addr, port, timestamp_bucket)
+
+        nonce_counter = 0
+        while True:
+            nonce = struct.pack("<Q", nonce_counter) + os.urandom(8)
+            full_challenge = challenge + nonce
+
+            solutions = (EquixSolution * EQUIX_MAX_SOLS)()
+            num_sols = lib.equix_solve(
+                ctx,
+                full_challenge,
+                len(full_challenge),
+                solutions,
+            )
+
+            for i in range(num_sols):
+                sol_bytes = _solution_to_bytes(solutions[i])
+                if _check_difficulty(challenge, nonce, sol_bytes, effort):
+                    return nonce, sol_bytes, timestamp_bucket
+
+            nonce_counter += 1
+    finally:
+        lib.equix_free(ctx)
+
+
+def verify(network: str, addr: str, port: int, nonce: bytes,
+           effort: int, solution_bytes: bytes, timestamp_bucket: int) -> bool:
+    """Verify an EquiX proof-of-work for a peer entry."""
+    lib = _load_lib()
+    ctx = lib.equix_alloc(EQUIX_CTX_VERIFY)
+    if not ctx:
+        raise RuntimeError("Failed to allocate EquiX verify context")
+
+    try:
+        # Accept current and previous timestamp bucket
+        current_bucket = int(time.time()) // 21600
+        if timestamp_bucket not in (current_bucket, current_bucket - 1):
+            return False
+
+        challenge = build_challenge(network, addr, port, timestamp_bucket)
+        full_challenge = challenge + nonce
+
+        sol = _bytes_to_solution(solution_bytes)
+        result = lib.equix_verify(ctx, full_challenge, len(full_challenge), ctypes.byref(sol))
+
+        if result != EQUIX_OK:
+            return False
+
+        return _check_difficulty(challenge, nonce, solution_bytes, effort)
+    finally:
+        lib.equix_free(ctx)

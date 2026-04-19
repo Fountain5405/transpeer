@@ -1,0 +1,15 @@
+# Built artifacts
+equix/equix-src/
+equix/libequix.so
+equix/libequix.dylib
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+dist/
+build/
+
+# Data
+*.db
+.transpeer/

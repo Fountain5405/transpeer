@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "transpeer"
+version = "0.1.0"
+description = "Cross-network P2P peer discovery overlay protocol"
+license = "Unlicense"
+requires-python = ">=3.11"
+dependencies = [
+    "aiohttp>=3.9",
+    "aiosqlite>=0.19",
+]
+
+[project.scripts]
+transpeer = "transpeer.__main__:main"

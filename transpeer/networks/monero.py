@@ -1,0 +1,65 @@
+"""Monero network plugin."""
+
+import asyncio
+import logging
+
+import aiohttp
+
+from .base import Network, PeerInfo
+
+log = logging.getLogger(__name__)
+
+# Monero P2P protocol: the first bytes of a handshake contain a network ID.
+# Mainnet levin protocol signature.
+LEVIN_SIGNATURE = b"\x01\x21\x01\x01\x01\x01\x01\x01"
+
+
+class MoneroNetwork(Network):
+    name = "monero"
+    default_port = 18080
+    default_rpc_port = 18081
+
+    async def extract_peers(self, rpc_host: str = "127.0.0.1") -> list[PeerInfo]:
+        """Get peer list from local monerod via JSON-RPC."""
+        url = f"http://{rpc_host}:{self.default_rpc_port}/json_rpc"
+        payload = {
+            "jsonrpc": "2.0",
+            "id": "0",
+            "method": "get_peer_list",
+        }
+        try:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
+                async with session.post(url, json=payload) as resp:
+                    if resp.status != 200:
+                        log.warning("monerod RPC returned %d", resp.status)
+                        return []
+                    data = await resp.json()
+
+            result = data.get("result", {})
+            peers = []
+            # White list = peers we've successfully connected to
+            for entry in result.get("white_list", []):
+                host = entry.get("host", "")
+                port = entry.get("port", self.default_port)
+                if host and port:
+                    peers.append(PeerInfo(addr=host, port=port))
+            log.info("Extracted %d Monero peers from local daemon", len(peers))
+            return peers
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+            log.debug("Failed to query monerod: %s", e)
+            return []
+
+    async def verify_peer(self, addr: str, port: int) -> bool:
+        """Check if a peer responds with Monero's levin protocol signature."""
+        try:
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_connection(addr, port),
+                timeout=5,
+            )
+            # Read first bytes — Monero sends a handshake with levin signature
+            data = await asyncio.wait_for(reader.read(8), timeout=5)
+            writer.close()
+            await writer.wait_closed()
+            return data == LEVIN_SIGNATURE
+        except (OSError, asyncio.TimeoutError):
+            return False
