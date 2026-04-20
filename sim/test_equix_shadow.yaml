@@ -1,0 +1,21 @@
+general:
+  stop_time: 30s
+  model_unblocked_syscall_latency: true
+
+network:
+  graph:
+    type: 1_gbit_switch
+
+hosts:
+  equixtest:
+    network_node_id: 0
+    bandwidth_down: "100 Mbit"
+    bandwidth_up: "100 Mbit"
+    ip_addr: 11.0.0.1
+    processes:
+    - path: python3
+      args: /home/lever65/transpeer/sim/test_equix.py
+      environment:
+        PYTHONPATH: /home/lever65/transpeer
+        PYTHONUNBUFFERED: "1"
+      start_time: 1s

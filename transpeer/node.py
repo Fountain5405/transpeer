@@ -13,7 +13,7 @@ from .config import (
 )
 from .networks import get_network
 from .peerstore import Peer, PeerStore
-from .pow import solve as pow_solve
+from .pow import solve as pow_solve, solve_simulated as pow_solve_sim
 from .scanner import Scanner
 from .server import TranspeerServer
 from .verifier import verify_peers
@@ -83,6 +83,10 @@ class Node:
                     for info in peer_infos:
                         if self.config.no_pow:
                             nonce, solution, bucket = b"\x00" * 16, b"\x00" * 16, 0
+                        elif self.config.sim_pow:
+                            nonce, solution, bucket = pow_solve_sim(
+                                name, info.addr, info.port, self.config.difficulty,
+                            )
                         else:
                             nonce, solution, bucket = pow_solve(
                                 name, info.addr, info.port, self.config.difficulty,

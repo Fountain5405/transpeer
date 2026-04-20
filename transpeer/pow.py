@@ -91,6 +91,50 @@ def _bytes_to_solution(data: bytes) -> EquixSolution:
     return sol
 
 
+# Benchmarked EquiX solve times (seconds) by difficulty on reference hardware.
+# Used by Shadow-compatible simulated solve to sleep for realistic durations.
+# Linear interpolation between these points.
+_SOLVE_TIME_BENCHMARKS = {
+    1: 0.2,
+    10: 0.83,
+    50: 6.0,
+    100: 4.1,
+    500: 14.0,
+}
+
+
+def _estimated_solve_time(effort: int) -> float:
+    """Estimate solve time for a given effort level based on benchmarks."""
+    points = sorted(_SOLVE_TIME_BENCHMARKS.items())
+    if effort <= points[0][0]:
+        return points[0][1]
+    if effort >= points[-1][0]:
+        return points[-1][1] * (effort / points[-1][0])
+    for i in range(len(points) - 1):
+        e0, t0 = points[i]
+        e1, t1 = points[i + 1]
+        if e0 <= effort <= e1:
+            frac = (effort - e0) / (e1 - e0)
+            return t0 + frac * (t1 - t0)
+    return points[-1][1]
+
+
+def solve_simulated(network: str, addr: str, port: int, effort: int) -> tuple[bytes, bytes, int]:
+    """Shadow-compatible EquiX solve that sleeps instead of computing.
+
+    Uses time.sleep() to simulate the CPU cost — Shadow intercepts sleep
+    and advances simulated time. Returns a dummy proof that will pass
+    simulated verification.
+    """
+    solve_time = _estimated_solve_time(effort)
+    time.sleep(solve_time)
+
+    timestamp_bucket = int(time.time()) // 21600
+    nonce = struct.pack("<Q", 0) + os.urandom(8)
+    solution = os.urandom(16)
+    return nonce, solution, timestamp_bucket
+
+
 def solve(network: str, addr: str, port: int, effort: int) -> tuple[bytes, bytes, int]:
     """Solve an EquiX puzzle for a peer entry.
 

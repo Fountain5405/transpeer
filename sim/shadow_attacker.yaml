@@ -1,0 +1,135 @@
+general:
+  stop_time: 600s
+  model_unblocked_syscall_latency: true
+  parallelism: 4
+network:
+  graph:
+    type: gml
+    inline: "graph [\n  node [\n    id 0\n    label \"net0\"\n    bandwidth_down \"\
+      100 Mbit\"\n    bandwidth_up \"100 Mbit\"\n  ]\n  edge [\n    source 0\n   \
+      \ target 0\n    latency \"50 ms\"\n    packet_loss 0.0\n  ]\n]"
+hosts:
+  honest1:
+    network_node_id: 0
+    bandwidth_down: 100 Mbit
+    bandwidth_up: 100 Mbit
+    ip_addr: 11.0.0.1
+    processes:
+    - path: python3
+      args: /home/lever65/transpeer/sim/daemons/fake_daemon.py --network p2pa --rpc-port
+        10001 --p2p-port 10000 --peers 11.0.0.2:10000,11.0.0.3:10000,11.0.0.4:10000,11.0.0.5:10000
+      environment:
+        PYTHONPATH: /home/lever65/transpeer
+        PYTHONUNBUFFERED: '1'
+      start_time: 1s
+      expected_final_state: running
+    - path: python3
+      args: -m transpeer --bind 0.0.0.0 --port 7337 --scan-range 11.0.0.0/28 --difficulty
+        100 --networks p2pa:10000:10001 --in-memory --sim-pow
+      environment:
+        PYTHONPATH: /home/lever65/transpeer
+        PYTHONUNBUFFERED: '1'
+      start_time: 3s
+      expected_final_state: running
+  honest2:
+    network_node_id: 0
+    bandwidth_down: 100 Mbit
+    bandwidth_up: 100 Mbit
+    ip_addr: 11.0.0.2
+    processes:
+    - path: python3
+      args: /home/lever65/transpeer/sim/daemons/fake_daemon.py --network p2pa --rpc-port
+        10001 --p2p-port 10000 --peers 11.0.0.1:10000,11.0.0.3:10000,11.0.0.4:10000,11.0.0.5:10000
+      environment:
+        PYTHONPATH: /home/lever65/transpeer
+        PYTHONUNBUFFERED: '1'
+      start_time: 1s
+      expected_final_state: running
+    - path: python3
+      args: -m transpeer --bind 0.0.0.0 --port 7337 --scan-range 11.0.0.0/28 --difficulty
+        100 --networks p2pa:10000:10001 --in-memory --sim-pow
+      environment:
+        PYTHONPATH: /home/lever65/transpeer
+        PYTHONUNBUFFERED: '1'
+      start_time: 3s
+      expected_final_state: running
+  honest3:
+    network_node_id: 0
+    bandwidth_down: 100 Mbit
+    bandwidth_up: 100 Mbit
+    ip_addr: 11.0.0.3
+    processes:
+    - path: python3
+      args: /home/lever65/transpeer/sim/daemons/fake_daemon.py --network p2pa --rpc-port
+        10001 --p2p-port 10000 --peers 11.0.0.1:10000,11.0.0.2:10000,11.0.0.4:10000,11.0.0.5:10000
+      environment:
+        PYTHONPATH: /home/lever65/transpeer
+        PYTHONUNBUFFERED: '1'
+      start_time: 1s
+      expected_final_state: running
+    - path: python3
+      args: -m transpeer --bind 0.0.0.0 --port 7337 --scan-range 11.0.0.0/28 --difficulty
+        100 --networks p2pa:10000:10001 --in-memory --sim-pow
+      environment:
+        PYTHONPATH: /home/lever65/transpeer
+        PYTHONUNBUFFERED: '1'
+      start_time: 3s
+      expected_final_state: running
+  honest4:
+    network_node_id: 0
+    bandwidth_down: 100 Mbit
+    bandwidth_up: 100 Mbit
+    ip_addr: 11.0.0.4
+    processes:
+    - path: python3
+      args: /home/lever65/transpeer/sim/daemons/fake_daemon.py --network p2pa --rpc-port
+        10001 --p2p-port 10000 --peers 11.0.0.1:10000,11.0.0.2:10000,11.0.0.3:10000,11.0.0.5:10000
+      environment:
+        PYTHONPATH: /home/lever65/transpeer
+        PYTHONUNBUFFERED: '1'
+      start_time: 1s
+      expected_final_state: running
+    - path: python3
+      args: -m transpeer --bind 0.0.0.0 --port 7337 --scan-range 11.0.0.0/28 --difficulty
+        100 --networks p2pa:10000:10001 --in-memory --sim-pow
+      environment:
+        PYTHONPATH: /home/lever65/transpeer
+        PYTHONUNBUFFERED: '1'
+      start_time: 3s
+      expected_final_state: running
+  honest5:
+    network_node_id: 0
+    bandwidth_down: 100 Mbit
+    bandwidth_up: 100 Mbit
+    ip_addr: 11.0.0.5
+    processes:
+    - path: python3
+      args: /home/lever65/transpeer/sim/daemons/fake_daemon.py --network p2pa --rpc-port
+        10001 --p2p-port 10000 --peers 11.0.0.1:10000,11.0.0.2:10000,11.0.0.3:10000,11.0.0.4:10000
+      environment:
+        PYTHONPATH: /home/lever65/transpeer
+        PYTHONUNBUFFERED: '1'
+      start_time: 1s
+      expected_final_state: running
+    - path: python3
+      args: -m transpeer --bind 0.0.0.0 --port 7337 --scan-range 11.0.0.0/28 --difficulty
+        100 --networks p2pa:10000:10001 --in-memory --sim-pow
+      environment:
+        PYTHONPATH: /home/lever65/transpeer
+        PYTHONUNBUFFERED: '1'
+      start_time: 3s
+      expected_final_state: running
+  attacker:
+    network_node_id: 0
+    bandwidth_down: 100 Mbit
+    bandwidth_up: 100 Mbit
+    ip_addr: 11.0.0.6
+    processes:
+    - path: python3
+      args: /home/lever65/transpeer/sim/attacker.py --target-network p2pa --target-port
+        10000 --num-fake-peers 50 --port 7337 --difficulty 100 --sim-pow
+      environment:
+        PYTHONPATH: /home/lever65/transpeer
+        PYTHONUNBUFFERED: '1'
+      start_time: 3s
+      expected_final_state: running

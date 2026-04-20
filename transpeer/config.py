@@ -40,6 +40,7 @@ class Config:
     scan_range: str | None = None  # CIDR block to scan (e.g., "11.0.0.0/24")
     in_memory: bool = False  # Skip SQLite, use in-memory only
     no_pow: bool = False  # Skip EquiX PoW (for simulation/testing)
+    sim_pow: bool = False  # Use simulated PoW (sleep-based, Shadow-compatible)
 
     def __post_init__(self):
         if not self.in_memory:
@@ -71,6 +72,10 @@ def parse_args() -> Config:
         "--no-pow", action="store_true",
         help="Disable EquiX proof-of-work (for simulation/testing only).",
     )
+    parser.add_argument(
+        "--sim-pow", action="store_true",
+        help="Use simulated PoW (sleep-based, Shadow-compatible).",
+    )
     args = parser.parse_args()
     return Config(
         port=args.port,
@@ -81,4 +86,5 @@ def parse_args() -> Config:
         scan_range=args.scan_range,
         in_memory=args.in_memory,
         no_pow=args.no_pow,
+        sim_pow=args.sim_pow,
     )
