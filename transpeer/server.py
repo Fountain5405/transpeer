@@ -10,11 +10,13 @@ from .peerstore import PeerStore
 
 
 class TranspeerServer:
-    def __init__(self, config: Config, store: PeerStore, node_id: str, start_time: float):
+    def __init__(self, config: Config, store: PeerStore, node_id: str, start_time: float,
+                 network_names: list[str] | None = None):
         self.config = config
         self.store = store
         self.node_id = node_id
         self.start_time = start_time
+        self.network_names = network_names or config.networks
         self._rate_limits: dict[str, list[float]] = defaultdict(list)
 
     def _check_rate_limit(self, addr: str) -> bool:
@@ -35,7 +37,7 @@ class TranspeerServer:
         # Record requester as candidate transpeer
         self.store.add_candidate(remote)
 
-        networks = self.config.networks
+        networks = self.network_names
         peer_counts = {n: self.store.peer_count(n) for n in networks}
 
         return web.json_response({

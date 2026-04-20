@@ -1,6 +1,7 @@
 """Async IPv4 scanner for discovering transpeers."""
 
 import asyncio
+import ipaddress
 import logging
 import random
 import struct
@@ -64,12 +65,25 @@ def random_ip() -> str:
             return _int_to_ip(ip_int)
 
 
+def random_ip_in_cidr(cidr: str) -> str:
+    """Generate a random IP within a CIDR block."""
+    network = ipaddress.IPv4Network(cidr, strict=False)
+    # Skip network and broadcast addresses
+    num_hosts = network.num_addresses - 2
+    if num_hosts <= 0:
+        return str(network.network_address + 1)
+    offset = random.randint(1, num_hosts)
+    return str(network.network_address + offset)
+
+
 class Scanner:
-    def __init__(self, config: Config, store: PeerStore, client: TranspeerClient):
+    def __init__(self, config: Config, store: PeerStore, client: TranspeerClient,
+                 node_id: str = ""):
         self.config = config
         self.store = store
         self.client = client
         self._running = False
+        self._node_id = node_id
 
     async def _probe_ip(self, addr: str) -> bool:
         """Try to connect to an IP on the transpeer port."""
@@ -86,19 +100,40 @@ class Scanner:
         # Port is open — check if it speaks transpeer
         entry = await self.client.probe_transpeer(addr)
         if entry:
-            log.info("Discovered transpeer at %s", addr)
+            # Don't add ourselves
+            if entry.node_id == self._node_id:
+                return False
+            log.info("Discovered transpeer at %s (node_id=%s)", addr, entry.node_id)
             await self.store.add_transpeer(entry)
             return True
         return False
 
-    async def scan_batch(self, count: int = SCAN_CONCURRENCY):
+    def _generate_ip(self) -> str:
+        """Generate a random IP to scan, respecting scan_range config."""
+        if self.config.scan_range:
+            return random_ip_in_cidr(self.config.scan_range)
+        return random_ip()
+
+    async def scan_batch(self, count: int | None = None):
         """Scan a batch of random IPs."""
-        ips = [random_ip() for _ in range(count)]
+        if count is None:
+            if self.config.scan_range:
+                # Scale batch size to range: scan ~half the range per batch
+                net = ipaddress.IPv4Network(self.config.scan_range, strict=False)
+                count = min(SCAN_CONCURRENCY, max(1, (net.num_addresses - 2) // 2))
+            else:
+                count = SCAN_CONCURRENCY
+        ips = set()
+        for _ in range(count * 2):  # generate extras to deduplicate
+            ip = self._generate_ip()
+            ips.add(ip)
+            if len(ips) >= count:
+                break
         tasks = [self._probe_ip(ip) for ip in ips]
         results = await asyncio.gather(*tasks, return_exceptions=True)
         found = sum(1 for r in results if r is True)
         if found:
-            log.info("Scan batch: found %d transpeers in %d probes", found, count)
+            log.info("Scan batch: found %d transpeers in %d probes", found, len(ips))
 
     async def probe_candidates(self):
         """Probe IPs that have queried us (implicit self-announcement)."""

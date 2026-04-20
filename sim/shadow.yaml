@@ -1,0 +1,164 @@
+general:
+  stop_time: 300s
+  model_unblocked_syscall_latency: true
+  parallelism: 4
+
+network:
+  graph:
+    type: gml
+    inline: |
+      graph [
+        node [
+          id 0
+          label "net0"
+          bandwidth_down "100 Mbit"
+          bandwidth_up "100 Mbit"
+        ]
+        edge [
+          source 0
+          target 0
+          latency "50 ms"
+          packet_loss 0.0
+        ]
+      ]
+
+hosts:
+  transpeer1:
+    network_node_id: 0
+    bandwidth_down: "100 Mbit"
+    bandwidth_up: "100 Mbit"
+    ip_addr: 11.0.0.1
+    processes:
+    - path: python3
+      args: -m transpeer --bind 0.0.0.0 --port 7337 --scan-range 11.0.0.0/28 --difficulty 1 --networks none --in-memory
+      environment:
+        PYTHONPATH: /home/lever65/transpeer
+        PYTHONUNBUFFERED: "1"
+      start_time: 1s
+      expected_final_state: running
+
+  transpeer2:
+    network_node_id: 0
+    bandwidth_down: "100 Mbit"
+    bandwidth_up: "100 Mbit"
+    ip_addr: 11.0.0.2
+    processes:
+    - path: python3
+      args: -m transpeer --bind 0.0.0.0 --port 7337 --scan-range 11.0.0.0/28 --difficulty 1 --networks none --in-memory
+      environment:
+        PYTHONPATH: /home/lever65/transpeer
+        PYTHONUNBUFFERED: "1"
+      start_time: 1s
+      expected_final_state: running
+
+  transpeer3:
+    network_node_id: 0
+    bandwidth_down: "100 Mbit"
+    bandwidth_up: "100 Mbit"
+    ip_addr: 11.0.0.3
+    processes:
+    - path: python3
+      args: -m transpeer --bind 0.0.0.0 --port 7337 --scan-range 11.0.0.0/28 --difficulty 1 --networks none --in-memory
+      environment:
+        PYTHONPATH: /home/lever65/transpeer
+        PYTHONUNBUFFERED: "1"
+      start_time: 1s
+      expected_final_state: running
+
+  transpeer4:
+    network_node_id: 0
+    bandwidth_down: "100 Mbit"
+    bandwidth_up: "100 Mbit"
+    ip_addr: 11.0.0.4
+    processes:
+    - path: python3
+      args: -m transpeer --bind 0.0.0.0 --port 7337 --scan-range 11.0.0.0/28 --difficulty 1 --networks none --in-memory
+      environment:
+        PYTHONPATH: /home/lever65/transpeer
+        PYTHONUNBUFFERED: "1"
+      start_time: 1s
+      expected_final_state: running
+
+  transpeer5:
+    network_node_id: 0
+    bandwidth_down: "100 Mbit"
+    bandwidth_up: "100 Mbit"
+    ip_addr: 11.0.0.5
+    processes:
+    - path: python3
+      args: -m transpeer --bind 0.0.0.0 --port 7337 --scan-range 11.0.0.0/28 --difficulty 1 --networks none --in-memory
+      environment:
+        PYTHONPATH: /home/lever65/transpeer
+        PYTHONUNBUFFERED: "1"
+      start_time: 1s
+      expected_final_state: running
+
+  transpeer6:
+    network_node_id: 0
+    bandwidth_down: "100 Mbit"
+    bandwidth_up: "100 Mbit"
+    ip_addr: 11.0.0.6
+    processes:
+    - path: python3
+      args: -m transpeer --bind 0.0.0.0 --port 7337 --scan-range 11.0.0.0/28 --difficulty 1 --networks none --in-memory
+      environment:
+        PYTHONPATH: /home/lever65/transpeer
+        PYTHONUNBUFFERED: "1"
+      start_time: 1s
+      expected_final_state: running
+
+  transpeer7:
+    network_node_id: 0
+    bandwidth_down: "100 Mbit"
+    bandwidth_up: "100 Mbit"
+    ip_addr: 11.0.0.7
+    processes:
+    - path: python3
+      args: -m transpeer --bind 0.0.0.0 --port 7337 --scan-range 11.0.0.0/28 --difficulty 1 --networks none --in-memory
+      environment:
+        PYTHONPATH: /home/lever65/transpeer
+        PYTHONUNBUFFERED: "1"
+      start_time: 1s
+      expected_final_state: running
+
+  transpeer8:
+    network_node_id: 0
+    bandwidth_down: "100 Mbit"
+    bandwidth_up: "100 Mbit"
+    ip_addr: 11.0.0.8
+    processes:
+    - path: python3
+      args: -m transpeer --bind 0.0.0.0 --port 7337 --scan-range 11.0.0.0/28 --difficulty 1 --networks none --in-memory
+      environment:
+        PYTHONPATH: /home/lever65/transpeer
+        PYTHONUNBUFFERED: "1"
+      start_time: 1s
+      expected_final_state: running
+
+  transpeer9:
+    network_node_id: 0
+    bandwidth_down: "100 Mbit"
+    bandwidth_up: "100 Mbit"
+    ip_addr: 11.0.0.9
+    processes:
+    - path: python3
+      args: -m transpeer --bind 0.0.0.0 --port 7337 --scan-range 11.0.0.0/28 --difficulty 1 --networks none --in-memory
+      environment:
+        PYTHONPATH: /home/lever65/transpeer
+        PYTHONUNBUFFERED: "1"
+      start_time: 1s
+      expected_final_state: running
+
+  transpeer10:
+    network_node_id: 0
+    bandwidth_down: "100 Mbit"
+    bandwidth_up: "100 Mbit"
+    ip_addr: 11.0.0.10
+    processes:
+    - path: python3
+      args: -m transpeer --bind 0.0.0.0 --port 7337 --scan-range 11.0.0.0/28 --difficulty 1 --networks none --in-memory
+      environment:
+        PYTHONPATH: /home/lever65/transpeer
+        PYTHONUNBUFFERED: "1"
+      start_time: 1s
+      expected_final_state: running

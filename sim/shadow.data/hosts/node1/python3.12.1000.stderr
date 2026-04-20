@@ -1,0 +1,12 @@
+2000-01-01 00:00:01,004 [__main__] P2P listener for p2pa on port 10000 (2 peers)
+2000-01-01 00:00:01,004 [__main__] RPC server for p2pa on port 10001
+2000-01-01 00:00:03,004 [aiohttp.access] 127.0.0.1 [01/Jan/2000:00:00:03 +0000] "POST /json_rpc HTTP/1.1" 200 324 "-" "Python/3.12 aiohttp/3.13.5"
+2000-01-01 00:01:03,005 [aiohttp.access] 127.0.0.1 [01/Jan/2000:00:01:03 +0000] "POST /json_rpc HTTP/1.1" 200 324 "-" "Python/3.12 aiohttp/3.13.5"
+2000-01-01 00:02:03,005 [aiohttp.access] 127.0.0.1 [01/Jan/2000:00:02:03 +0000] "POST /json_rpc HTTP/1.1" 200 324 "-" "Python/3.12 aiohttp/3.13.5"
+2000-01-01 00:03:03,006 [aiohttp.access] 127.0.0.1 [01/Jan/2000:00:03:03 +0000] "POST /json_rpc HTTP/1.1" 200 324 "-" "Python/3.12 aiohttp/3.13.5"
+2000-01-01 00:04:03,006 [aiohttp.access] 127.0.0.1 [01/Jan/2000:00:04:03 +0000] "POST /json_rpc HTTP/1.1" 200 324 "-" "Python/3.12 aiohttp/3.13.5"
+2000-01-01 00:05:03,006 [aiohttp.access] 127.0.0.1 [01/Jan/2000:00:05:03 +0000] "POST /json_rpc HTTP/1.1" 200 324 "-" "Python/3.12 aiohttp/3.13.5"
+2000-01-01 00:06:03,007 [aiohttp.access] 127.0.0.1 [01/Jan/2000:00:06:03 +0000] "POST /json_rpc HTTP/1.1" 200 324 "-" "Python/3.12 aiohttp/3.13.5"
+2000-01-01 00:07:03,007 [aiohttp.access] 127.0.0.1 [01/Jan/2000:00:07:03 +0000] "POST /json_rpc HTTP/1.1" 200 324 "-" "Python/3.12 aiohttp/3.13.5"
+2000-01-01 00:08:03,008 [aiohttp.access] 127.0.0.1 [01/Jan/2000:00:08:03 +0000] "POST /json_rpc HTTP/1.1" 200 324 "-" "Python/3.12 aiohttp/3.13.5"
+2000-01-01 00:09:03,008 [aiohttp.access] 127.0.0.1 [01/Jan/2000:00:09:03 +0000] "POST /json_rpc HTTP/1.1" 200 324 "-" "Python/3.12 aiohttp/3.13.5"

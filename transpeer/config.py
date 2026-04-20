@@ -37,10 +37,16 @@ class Config:
     data_dir: Path = field(default_factory=lambda: Path.home() / ".transpeer")
     difficulty: int = DEFAULT_DIFFICULTY
     networks: list[str] = field(default_factory=lambda: ["monero", "wownero", "aeon"])
+    scan_range: str | None = None  # CIDR block to scan (e.g., "11.0.0.0/24")
+    in_memory: bool = False  # Skip SQLite, use in-memory only
+    no_pow: bool = False  # Skip EquiX PoW (for simulation/testing)
 
     def __post_init__(self):
-        self.data_dir.mkdir(parents=True, exist_ok=True)
-        self.db_path = self.data_dir / "peers.db"
+        if not self.in_memory:
+            self.data_dir.mkdir(parents=True, exist_ok=True)
+            self.db_path = self.data_dir / "peers.db"
+        else:
+            self.db_path = None
 
 
 def parse_args() -> Config:
@@ -53,6 +59,18 @@ def parse_args() -> Config:
         "--networks", nargs="+", default=["monero", "wownero", "aeon"],
         help="Networks to participate in",
     )
+    parser.add_argument(
+        "--scan-range", default=None,
+        help="CIDR block to scan (e.g., 11.0.0.0/24). If unset, scans random IPv4.",
+    )
+    parser.add_argument(
+        "--in-memory", action="store_true",
+        help="Use in-memory storage only (no SQLite). Useful for simulation.",
+    )
+    parser.add_argument(
+        "--no-pow", action="store_true",
+        help="Disable EquiX proof-of-work (for simulation/testing only).",
+    )
     args = parser.parse_args()
     return Config(
         port=args.port,
@@ -60,4 +78,7 @@ def parse_args() -> Config:
         data_dir=args.data_dir,
         difficulty=args.difficulty,
         networks=args.networks,
+        scan_range=args.scan_range,
+        in_memory=args.in_memory,
+        no_pow=args.no_pow,
     )

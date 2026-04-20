@@ -28,14 +28,15 @@ class Node:
         self.start_time = time.time()
         self.store = PeerStore(config)
         self.client = TranspeerClient(config, self.store)
-        self.scanner = Scanner(config, self.store, self.client)
-        self.server = TranspeerServer(config, self.store, self.node_id, self.start_time)
+        self.scanner = Scanner(config, self.store, self.client, self.node_id)
+        self.server = None  # Created after networks are loaded
         self._networks = {}
-        for name in config.networks:
+        for spec in config.networks:
             try:
-                self._networks[name] = get_network(name)
+                net = get_network(spec)
+                self._networks[net.name] = net
             except ValueError:
-                log.warning("Unknown network: %s", name)
+                log.warning("Unknown network: %s", spec)
 
     async def run(self):
         logging.basicConfig(
@@ -46,6 +47,10 @@ class Node:
         log.info("Networks: %s", ", ".join(self._networks.keys()))
 
         await self.store.init()
+        self.server = TranspeerServer(
+            self.config, self.store, self.node_id, self.start_time,
+            network_names=list(self._networks.keys()),
+        )
 
         try:
             # Start HTTP server
@@ -76,9 +81,12 @@ class Node:
                     peer_infos = await network.extract_peers()
                     now = int(time.time())
                     for info in peer_infos:
-                        nonce, solution, bucket = pow_solve(
-                            name, info.addr, info.port, self.config.difficulty,
-                        )
+                        if self.config.no_pow:
+                            nonce, solution, bucket = b"\x00" * 16, b"\x00" * 16, 0
+                        else:
+                            nonce, solution, bucket = pow_solve(
+                                name, info.addr, info.port, self.config.difficulty,
+                            )
                         peer = Peer(
                             network=name,
                             addr=info.addr,

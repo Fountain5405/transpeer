@@ -66,6 +66,7 @@ class TranspeerEntry:
     port: int
     networks: list[str] = field(default_factory=list)
     last_seen: int = 0
+    node_id: str = ""
 
     @property
     def key(self) -> str:
@@ -90,6 +91,8 @@ class PeerStore:
         self._lock = asyncio.Lock()
 
     async def init(self):
+        if self.config.in_memory:
+            return
         self._db = await aiosqlite.connect(str(self.config.db_path))
         await self._db.executescript("""
             CREATE TABLE IF NOT EXISTS peers (
@@ -137,7 +140,7 @@ class PeerStore:
                 self._transpeers[entry.key] = entry
 
     async def close(self):
-        if self._db:
+        if self._db and not self.config.in_memory:
             await self._db.close()
 
     # -- Peers --
@@ -200,11 +203,6 @@ class PeerStore:
             ]
             for key in stale:
                 del self._peers[key]
-                parts = key.split(":")
-                await self._db.execute(
-                    "DELETE FROM peers WHERE network=? AND addr=? AND port=?",
-                    (parts[0], parts[1], int(parts[2])),
-                )
 
             stale_tp = [
                 key for key, t in self._transpeers.items()
@@ -212,16 +210,25 @@ class PeerStore:
             ]
             for key in stale_tp:
                 del self._transpeers[key]
-                parts = key.split(":")
-                await self._db.execute(
-                    "DELETE FROM transpeers WHERE addr=? AND port=?",
-                    (parts[0], int(parts[1])),
-                )
 
-            if stale or stale_tp:
+            if self._db and (stale or stale_tp):
+                for key in stale:
+                    parts = key.split(":")
+                    await self._db.execute(
+                        "DELETE FROM peers WHERE network=? AND addr=? AND port=?",
+                        (parts[0], parts[1], int(parts[2])),
+                    )
+                for key in stale_tp:
+                    parts = key.split(":")
+                    await self._db.execute(
+                        "DELETE FROM transpeers WHERE addr=? AND port=?",
+                        (parts[0], int(parts[1])),
+                    )
                 await self._db.commit()
 
     async def _save_peer(self, peer: Peer):
+        if not self._db:
+            return
         await self._db.execute("""
             INSERT OR REPLACE INTO peers
             (network, addr, port, last_seen, sources, verified, nonce, effort, solution, timestamp_bucket)
@@ -254,6 +261,8 @@ class PeerStore:
         return list(self._transpeers.values())
 
     async def _save_transpeer(self, entry: TranspeerEntry):
+        if not self._db:
+            return
         await self._db.execute("""
             INSERT OR REPLACE INTO transpeers (addr, port, networks, last_seen)
             VALUES (?, ?, ?, ?)

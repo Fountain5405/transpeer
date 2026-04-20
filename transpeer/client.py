@@ -34,6 +34,7 @@ class TranspeerClient:
                         port=port,
                         networks=data.get("networks", []),
                         last_seen=int(time.time()),
+                        node_id=data.get("node_id", ""),
                     )
         except (aiohttp.ClientError, asyncio.TimeoutError, ValueError):
             return None
@@ -50,8 +51,8 @@ class TranspeerClient:
                     peers = []
                     for entry in data.get("peers", []):
                         peer = Peer.from_dict(network, entry)
-                        # Verify PoW if proof is present
-                        if peer.nonce and peer.solution:
+                        # Verify PoW if proof is present (skip if --no-pow)
+                        if not self.config.no_pow and peer.nonce and peer.solution:
                             if not pow_verify(
                                 network, peer.addr, peer.port,
                                 peer.nonce, peer.effort, peer.solution,
