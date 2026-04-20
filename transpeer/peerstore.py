@@ -81,12 +81,20 @@ class TranspeerEntry:
         }
 
 
+# Per-source transpeer limits
+MAX_PEERS_PER_SOURCE = 100  # Max peer entries accepted from a single transpeer
+DEAD_PEER_MAX_AGE = 3600  # Prune unverified/dead peers after 1 hour
+DEAD_PEER_COOLDOWN = 1800  # Don't re-accept a dead peer for 30 minutes
+
+
 class PeerStore:
     def __init__(self, config: Config):
         self.config = config
         self._peers: dict[str, Peer] = {}  # key -> Peer
         self._transpeers: dict[str, TranspeerEntry] = {}  # key -> TranspeerEntry
         self._candidates: dict[str, int] = {}  # addr -> timestamp (IPs that queried us)
+        self._dead_peers: dict[str, int] = {}  # key -> timestamp of death (cooldown)
+        self._source_counts: dict[str, int] = {}  # source_addr -> count of peers accepted
         self._db: aiosqlite.Connection | None = None
         self._lock = asyncio.Lock()
 
@@ -145,9 +153,21 @@ class PeerStore:
 
     # -- Peers --
 
-    async def add_peer(self, peer: Peer) -> bool:
+    async def add_peer(self, peer: Peer, source_addr: str = "") -> bool:
         """Add or update a peer. Returns True if new."""
         async with self._lock:
+            # Reject peers on the dead cooldown list
+            now = int(time.time())
+            death_time = self._dead_peers.get(peer.key)
+            if death_time and now - death_time < DEAD_PEER_COOLDOWN:
+                return False
+
+            # Enforce per-source limit
+            if source_addr:
+                count = self._source_counts.get(source_addr, 0)
+                if peer.key not in self._peers and count >= MAX_PEERS_PER_SOURCE:
+                    return False
+
             existing = self._peers.get(peer.key)
             if existing:
                 existing.sources = max(existing.sources, peer.sources)
@@ -162,6 +182,8 @@ class PeerStore:
             else:
                 self._peers[peer.key] = peer
                 await self._save_peer(peer)
+                if source_addr:
+                    self._source_counts[source_addr] = self._source_counts.get(source_addr, 0) + 1
                 return True
 
     async def mark_verified(self, network: str, addr: str, port: int):
@@ -178,9 +200,21 @@ class PeerStore:
         async with self._lock:
             peer = self._peers.get(key)
             if peer:
-                peer.sources = max(0, peer.sources - 1)
-                peer.verified = False
-                await self._save_peer(peer)
+                if peer.verified:
+                    # Previously verified peer went offline — give it a chance
+                    peer.sources = max(0, peer.sources - 1)
+                    peer.verified = False
+                    await self._save_peer(peer)
+                else:
+                    # Never verified — remove immediately, add to cooldown
+                    del self._peers[key]
+                    self._dead_peers[key] = int(time.time())
+                    if self._db:
+                        await self._db.execute(
+                            "DELETE FROM peers WHERE network=? AND addr=? AND port=?",
+                            (network, addr, port),
+                        )
+                        await self._db.commit()
 
     def get_peers(self, network: str, verified_only: bool = True) -> list[Peer]:
         return [
@@ -199,7 +233,8 @@ class PeerStore:
         async with self._lock:
             stale = [
                 key for key, p in self._peers.items()
-                if now - p.last_seen > PEER_PRUNE_AGE and p.sources <= 0
+                if (now - p.last_seen > PEER_PRUNE_AGE and p.sources <= 0)
+                or (not p.verified and now - p.last_seen > DEAD_PEER_MAX_AGE)
             ]
             for key in stale:
                 del self._peers[key]
@@ -210,6 +245,14 @@ class PeerStore:
             ]
             for key in stale_tp:
                 del self._transpeers[key]
+
+            # Clean up expired dead peer cooldowns
+            expired_dead = [
+                key for key, ts in self._dead_peers.items()
+                if now - ts > DEAD_PEER_COOLDOWN
+            ]
+            for key in expired_dead:
+                del self._dead_peers[key]
 
             if self._db and (stale or stale_tp):
                 for key in stale:

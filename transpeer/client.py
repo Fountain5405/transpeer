@@ -8,7 +8,7 @@ import aiohttp
 
 from .config import Config, PROTOCOL_VERSION, TRANSPEER_PORT
 from .peerstore import Peer, PeerStore, TranspeerEntry
-from .pow import verify as pow_verify
+from .pow import verify as pow_verify, verify_simulated as pow_verify_sim
 
 log = logging.getLogger(__name__)
 
@@ -53,7 +53,8 @@ class TranspeerClient:
                         peer = Peer.from_dict(network, entry)
                         # Verify PoW if proof is present (skip if --no-pow)
                         if not self.config.no_pow and peer.nonce and peer.solution:
-                            if not pow_verify(
+                            vfn = pow_verify_sim if self.config.sim_pow else pow_verify
+                            if not vfn(
                                 network, peer.addr, peer.port,
                                 peer.nonce, peer.effort, peer.solution,
                                 peer.timestamp_bucket,
@@ -102,10 +103,13 @@ class TranspeerClient:
         # Fetch peers for each network it serves
         for network in updated.networks:
             peers = await self.fetch_peers(entry.addr, entry.port, network)
+            accepted = 0
             for peer in peers:
-                await self.store.add_peer(peer)
+                if await self.store.add_peer(peer, source_addr=entry.addr):
+                    accepted += 1
             if peers:
-                log.info("Got %d peers for %s from %s", len(peers), network, entry.addr)
+                log.info("Got %d peers for %s from %s (%d new)",
+                         len(peers), network, entry.addr, accepted)
 
         # Fetch its transpeer list
         new_transpeers = await self.fetch_transpeers(entry.addr, entry.port)

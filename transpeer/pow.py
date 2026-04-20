@@ -119,20 +119,34 @@ def _estimated_solve_time(effort: int) -> float:
     return points[-1][1]
 
 
+# Magic marker for simulated proofs — both solve and verify recognize this
+_SIM_PROOF_MAGIC = b"SIMPOW"
+
+
 def solve_simulated(network: str, addr: str, port: int, effort: int) -> tuple[bytes, bytes, int]:
     """Shadow-compatible EquiX solve that sleeps instead of computing.
 
     Uses time.sleep() to simulate the CPU cost — Shadow intercepts sleep
-    and advances simulated time. Returns a dummy proof that will pass
-    simulated verification.
+    and advances simulated time. Returns a proof tagged with a magic marker
+    that verify_simulated() will accept.
     """
     solve_time = _estimated_solve_time(effort)
     time.sleep(solve_time)
 
     timestamp_bucket = int(time.time()) // 21600
-    nonce = struct.pack("<Q", 0) + os.urandom(8)
+    # Embed magic marker so verify_simulated knows this is a valid sim proof
+    nonce = _SIM_PROOF_MAGIC + os.urandom(10)
     solution = os.urandom(16)
     return nonce, solution, timestamp_bucket
+
+
+def verify_simulated(network: str, addr: str, port: int, nonce: bytes,
+                     effort: int, solution_bytes: bytes, timestamp_bucket: int) -> bool:
+    """Shadow-compatible verify that accepts simulated proofs."""
+    if nonce[:len(_SIM_PROOF_MAGIC)] == _SIM_PROOF_MAGIC:
+        return True
+    # Fall through to real verification for non-simulated proofs
+    return verify(network, addr, port, nonce, effort, solution_bytes, timestamp_bucket)
 
 
 def solve(network: str, addr: str, port: int, effort: int) -> tuple[bytes, bytes, int]:

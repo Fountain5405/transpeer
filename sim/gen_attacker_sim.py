@@ -17,11 +17,11 @@ import yaml
 TRANSPEER_PATH = "/home/lever65/transpeer"
 SCAN_RANGE = "11.0.0.0/28"
 DIFFICULTY = 100
-ATTACKER_FAKE_PEERS = 50  # Attacker tries to inject 50 fake peers
+ATTACKER_FAKE_PEERS = 100  # Attacker tries to inject 100 fake peers
 
 config = {
     "general": {
-        "stop_time": "600s",
+        "stop_time": "1800s",  # 30 minutes
         "model_unblocked_syscall_latency": True,
         "parallelism": 4,
     },
