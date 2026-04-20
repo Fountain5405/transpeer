@@ -42,6 +42,8 @@ class Config:
     no_pow: bool = False  # Skip EquiX PoW (for simulation/testing)
     sim_pow: bool = False  # Use simulated PoW (sleep-based, Shadow-compatible)
     share_white_list: bool = False  # Share full white list instead of connected peers
+    static_peers: dict[str, list[tuple[str, int]]] | None = None  # Preset peers per network
+    no_verify: bool = False  # Disable peer verification loop (for simulation only)
 
     def __post_init__(self):
         if not self.in_memory:
@@ -81,6 +83,14 @@ def parse_args() -> Config:
         "--share-white-list", action="store_true",
         help="Share full daemon white list instead of connected peers only.",
     )
+    parser.add_argument(
+        "--static-peers", default=None,
+        help="Static peer list for simulation: 'network1:addr1:port1,addr2:port2;network2:...'",
+    )
+    parser.add_argument(
+        "--no-verify", action="store_true",
+        help="Disable peer verification loop (simulation/testing only).",
+    )
     args = parser.parse_args()
     return Config(
         port=args.port,
@@ -93,4 +103,31 @@ def parse_args() -> Config:
         no_pow=args.no_pow,
         sim_pow=args.sim_pow,
         share_white_list=args.share_white_list,
+        static_peers=_parse_static_peers(args.static_peers),
+        no_verify=args.no_verify,
     )
+
+
+def _parse_static_peers(spec: str | None) -> dict[str, list[tuple[str, int]]] | None:
+    """Parse static peer spec: 'network:addr:port,addr:port;network:addr:port,...'"""
+    if not spec:
+        return None
+    result: dict[str, list[tuple[str, int]]] = {}
+    for net_spec in spec.split(";"):
+        if not net_spec:
+            continue
+        parts = net_spec.split(":", 1)
+        if len(parts) != 2:
+            continue
+        network, peers_str = parts
+        peers = []
+        for peer in peers_str.split(","):
+            peer = peer.strip()
+            if not peer:
+                continue
+            addr, _, port = peer.rpartition(":")
+            if addr and port:
+                peers.append((addr, int(port)))
+        if peers:
+            result[network] = peers
+    return result

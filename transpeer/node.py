@@ -74,12 +74,19 @@ class Node:
         finally:
             await self.store.close()
 
+    async def _extract_peer_infos(self, name: str, network):
+        """Get peer infos from daemon RPC, or static list if configured."""
+        if self.config.static_peers and name in self.config.static_peers:
+            from .networks.base import PeerInfo
+            return [PeerInfo(addr=a, port=p) for a, p in self.config.static_peers[name]]
+        return await network.extract_peers()
+
     async def _extract_loop(self):
         """Periodically extract peers from local daemons."""
         while True:
             for name, network in self._networks.items():
                 try:
-                    peer_infos = await network.extract_peers()
+                    peer_infos = await self._extract_peer_infos(name, network)
                     now = int(time.time())
                     for info in peer_infos:
                         if self.config.no_pow:
@@ -139,6 +146,9 @@ class Node:
         (checks protocol magic bytes). Falls back to TCP-only for networks
         we don't run (can only check if port is open).
         """
+        if self.config.no_verify:
+            log.info("Verification disabled by --no-verify")
+            return
         while True:
             await asyncio.sleep(EXTRACT_INTERVAL * 5)  # Less frequent than extraction
             # Verify all networks we have peers for, not just ones we run
