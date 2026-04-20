@@ -103,9 +103,12 @@ class Scanner:
             # Don't add ourselves
             if entry.node_id == self._node_id:
                 return False
-            log.info("Discovered transpeer at %s (node_id=%s)", addr, entry.node_id)
-            await self.store.add_transpeer(entry)
-            return True
+            added = await self.store.add_transpeer(entry)
+            if added:
+                log.info("Discovered transpeer at %s (node_id=%s)", addr, entry.node_id)
+            else:
+                log.debug("Transpeer at %s rejected (subnet limit or duplicate)", addr)
+            return added
         return False
 
     def _generate_ip(self) -> str:

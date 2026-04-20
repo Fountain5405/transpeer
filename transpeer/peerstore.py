@@ -87,6 +87,7 @@ BASE_PEERS_PER_SOURCE = 50  # Initial cap for a new source transpeer
 VERIFY_THRESHOLD = 0.8  # 80% alive to earn a cap increase
 DEAD_PEER_MAX_AGE = 3600  # Prune unverified/dead peers after 1 hour
 DEAD_PEER_COOLDOWN = 1800  # Don't re-accept a dead peer for 30 minutes
+MAX_TRANSPEERS_PER_SUBNET = 3  # Max transpeers accepted from same /16 subnet
 
 
 @dataclass
@@ -344,8 +345,28 @@ class PeerStore:
 
     # -- Transpeers --
 
-    async def add_transpeer(self, entry: TranspeerEntry) -> bool:
-        """Add or update a transpeer. Returns True if new."""
+    @staticmethod
+    def _subnet_16(addr: str) -> str:
+        """Extract /16 subnet prefix from an IPv4 address."""
+        parts = addr.split(".")
+        if len(parts) >= 2:
+            return f"{parts[0]}.{parts[1]}"
+        return addr
+
+    def _count_transpeers_in_subnet(self, subnet: str) -> int:
+        return sum(
+            1 for t in self._transpeers.values()
+            if self._subnet_16(t.addr) == subnet
+        )
+
+    async def add_transpeer(self, entry: TranspeerEntry, gossiped: bool = False) -> bool:
+        """Add or update a transpeer. Returns True if new.
+
+        Args:
+            gossiped: True if this transpeer was learned from another transpeer's
+                /transpeers endpoint. False if discovered directly by scanning.
+                Subnet diversity limits only apply to gossiped transpeers.
+        """
         async with self._lock:
             existing = self._transpeers.get(entry.key)
             if existing:
@@ -354,10 +375,17 @@ class PeerStore:
                     existing.networks = entry.networks
                 await self._save_transpeer(existing)
                 return False
-            else:
-                self._transpeers[entry.key] = entry
-                await self._save_transpeer(entry)
-                return True
+
+            # Enforce /16 subnet diversity limit for gossiped transpeers only.
+            # Directly scanned transpeers are inherently diverse (random sampling).
+            if gossiped:
+                subnet = self._subnet_16(entry.addr)
+                if self._count_transpeers_in_subnet(subnet) >= MAX_TRANSPEERS_PER_SUBNET:
+                    return False
+
+            self._transpeers[entry.key] = entry
+            await self._save_transpeer(entry)
+            return True
 
     def get_transpeers(self) -> list[TranspeerEntry]:
         return list(self._transpeers.values())

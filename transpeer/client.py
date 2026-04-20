@@ -111,9 +111,9 @@ class TranspeerClient:
                 log.info("Got %d peers for %s from %s (%d new)",
                          len(peers), network, entry.addr, accepted)
 
-        # Fetch its transpeer list
+        # Fetch its transpeer list (gossiped — subnet limits apply)
         new_transpeers = await self.fetch_transpeers(entry.addr, entry.port)
         for tp in new_transpeers:
-            await self.store.add_transpeer(tp)
+            await self.store.add_transpeer(tp, gossiped=True)
         if new_transpeers:
             log.info("Got %d transpeers from %s", len(new_transpeers), entry.addr)
