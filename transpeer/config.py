@@ -25,6 +25,12 @@ EXTRACT_INTERVAL = 60  # seconds between local daemon queries
 SCAN_INTERVAL = 10  # seconds between scan batches
 QUERY_INTERVAL = 300  # seconds between querying known transpeers
 
+# Transpeer tracking and query limits
+MAX_TRANSPEERS_TRACKED = 500  # Total transpeers kept in local store
+GOSSIP_SAMPLE_SIZE = 50  # Max transpeers returned in /transpeers response
+QUERY_BATCH_SIZE = 20  # Number of transpeers queried per cycle (concurrent)
+MAX_PEERS_PER_NETWORK = 2000  # Cap on peers stored per network
+
 # Rate limiting
 RATE_LIMIT_REQUESTS = 60  # per IP
 RATE_LIMIT_WINDOW = 60  # seconds

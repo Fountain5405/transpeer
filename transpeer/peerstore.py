@@ -7,7 +7,10 @@ from dataclasses import dataclass, field
 
 import aiosqlite
 
-from .config import Config, PEER_PRUNE_AGE, TRANSPEER_PRUNE_AGE
+from .config import (
+    Config, PEER_PRUNE_AGE, TRANSPEER_PRUNE_AGE,
+    MAX_TRANSPEERS_TRACKED, MAX_PEERS_PER_NETWORK,
+)
 
 
 @dataclass
@@ -68,6 +71,7 @@ class TranspeerEntry:
     networks: list[str] = field(default_factory=list)
     last_seen: int = 0
     node_id: str = ""
+    last_queried: int = 0  # Timestamp of last successful query (for rotation)
 
     @property
     def key(self) -> str:
@@ -214,6 +218,13 @@ class PeerStore:
             if source_addr:
                 trust = self.get_source_trust(source_addr)
                 if peer.key not in self._peers and trust.accepted >= trust.cap:
+                    return False
+
+            # Enforce per-network cap (avoid unbounded growth at scale)
+            if peer.key not in self._peers:
+                net_count = sum(1 for p in self._peers.values()
+                                if p.network == peer.network)
+                if net_count >= MAX_PEERS_PER_NETWORK:
                     return False
 
             existing = self._peers.get(peer.key)
@@ -383,12 +394,60 @@ class PeerStore:
                 if self._count_transpeers_in_subnet(subnet) >= MAX_TRANSPEERS_PER_SUBNET:
                     return False
 
+            # Enforce total transpeer cap. When full, evict the oldest entry
+            # (lowest last_seen) to make room for fresh discoveries.
+            if len(self._transpeers) >= MAX_TRANSPEERS_TRACKED:
+                oldest_key = min(
+                    self._transpeers.keys(),
+                    key=lambda k: self._transpeers[k].last_seen,
+                )
+                del self._transpeers[oldest_key]
+                if self._db:
+                    parts = oldest_key.split(":")
+                    await self._db.execute(
+                        "DELETE FROM transpeers WHERE addr=? AND port=?",
+                        (parts[0], int(parts[1])),
+                    )
+
             self._transpeers[entry.key] = entry
             await self._save_transpeer(entry)
             return True
 
     def get_transpeers(self) -> list[TranspeerEntry]:
         return list(self._transpeers.values())
+
+    def get_transpeers_for_query(self, limit: int) -> list[TranspeerEntry]:
+        """Return up to `limit` transpeers, oldest-queried first (rotation)."""
+        return sorted(
+            self._transpeers.values(),
+            key=lambda t: t.last_queried,
+        )[:limit]
+
+    def mark_queried(self, addr: str, port: int):
+        """Record that we just queried a transpeer."""
+        key = f"{addr}:{port}"
+        entry = self._transpeers.get(key)
+        if entry:
+            entry.last_queried = int(time.time())
+
+    def get_transpeers_for_gossip(self, limit: int,
+                                  exclude_addr: str = "") -> list[TranspeerEntry]:
+        """Return up to `limit` transpeers to share via /transpeers.
+
+        Samples weighted toward recently-seen transpeers so we gossip
+        about live ones. Excludes the requester's own IP.
+        """
+        import random
+        candidates = [
+            t for t in self._transpeers.values()
+            if t.addr != exclude_addr
+        ]
+        if len(candidates) <= limit:
+            return candidates
+        # Weighted sample favoring recently-seen transpeers
+        now = int(time.time())
+        weights = [max(1, 86400 - (now - t.last_seen)) for t in candidates]
+        return random.choices(candidates, weights=weights, k=limit)
 
     async def _save_transpeer(self, entry: TranspeerEntry):
         if not self._db:

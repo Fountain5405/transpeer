@@ -153,17 +153,23 @@ async def run_tests():
     # --- Test 3: Transpeer List Exchange ---
     print("\n=== Test 3: Transpeer List Exchange ===")
 
-    # Add each other as known transpeers
+    # Add each other as known transpeers, plus a fake third one
+    # (gossip excludes the requester, so we need a 3rd entry to see anything back)
     await store_a.add_transpeer(entry_b)
     await store_b.add_transpeer(entry_a)
+    fake_c = TranspeerEntry(addr="1.2.3.4", port=7337, networks=["p2pc"],
+                            last_seen=int(time.time()))
+    await store_b.add_transpeer(fake_c)
 
-    # Node A fetches transpeer list from Node B
+    # Node A fetches transpeer list from Node B; should exclude A itself
     tp_list = await client_a.fetch_transpeers("127.0.0.1", PORT_B)
     check("Node A gets transpeer list from B", len(tp_list) >= 1)
-    if tp_list:
-        check("Transpeer list includes Node A itself", any(
-            t.addr == "127.0.0.1" and t.port == PORT_A for t in tp_list
-        ))
+    check("Gossip excludes the requester", not any(
+        t.addr == "127.0.0.1" for t in tp_list
+    ))
+    check("Gossip includes a third transpeer", any(
+        t.addr == "1.2.3.4" for t in tp_list
+    ))
 
     # --- Test 4: Full query_transpeer flow ---
     print("\n=== Test 4: Full Query Flow ===")

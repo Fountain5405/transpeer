@@ -5,7 +5,10 @@ from collections import defaultdict
 
 from aiohttp import web
 
-from .config import Config, PROTOCOL_VERSION, RATE_LIMIT_REQUESTS, RATE_LIMIT_WINDOW
+from .config import (
+    Config, PROTOCOL_VERSION, RATE_LIMIT_REQUESTS, RATE_LIMIT_WINDOW,
+    GOSSIP_SAMPLE_SIZE,
+)
 from .peerstore import PeerStore
 
 
@@ -67,7 +70,9 @@ class TranspeerServer:
         if not self._check_rate_limit(remote):
             return web.json_response({"error": "rate limited"}, status=429)
 
-        entries = self.store.get_transpeers()
+        entries = self.store.get_transpeers_for_gossip(
+            GOSSIP_SAMPLE_SIZE, exclude_addr=remote,
+        )
 
         return web.json_response({
             "transpeers": [e.to_dict() for e in entries],

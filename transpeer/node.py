@@ -9,7 +9,7 @@ from aiohttp import web
 
 from .client import TranspeerClient
 from .config import (
-    Config, EXTRACT_INTERVAL, QUERY_INTERVAL, SCAN_INTERVAL,
+    Config, EXTRACT_INTERVAL, QUERY_INTERVAL, SCAN_INTERVAL, QUERY_BATCH_SIZE,
 )
 from .networks import get_network
 from .peerstore import Peer, PeerStore
@@ -126,18 +126,28 @@ class Node:
             await asyncio.sleep(SCAN_INTERVAL)
 
     async def _query_loop(self):
-        """Periodically query known transpeers for their data."""
+        """Periodically query a batch of known transpeers for their data.
+
+        Uses rotation: queries the oldest-not-recently-queried transpeers
+        first. Queries run concurrently within each batch to bound cycle time.
+        """
         while True:
             await asyncio.sleep(QUERY_INTERVAL)
-            transpeers = self.store.get_transpeers()
-            if not transpeers:
+            batch = self.store.get_transpeers_for_query(QUERY_BATCH_SIZE)
+            if not batch:
                 continue
-            log.info("Querying %d known transpeers", len(transpeers))
-            for entry in transpeers:
+            total_known = len(self.store.get_transpeers())
+            log.info("Querying batch of %d (of %d known transpeers)",
+                     len(batch), total_known)
+
+            async def _query_one(entry):
                 try:
                     await self.client.query_transpeer(entry)
+                    self.store.mark_queried(entry.addr, entry.port)
                 except Exception as e:
                     log.error("Error querying transpeer %s: %s", entry.addr, e)
+
+            await asyncio.gather(*(_query_one(e) for e in batch))
 
     async def _verify_loop(self):
         """Periodically verify peers are actually reachable.
