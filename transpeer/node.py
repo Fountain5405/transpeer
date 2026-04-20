@@ -133,12 +133,20 @@ class Node:
                     log.error("Error querying transpeer %s: %s", entry.addr, e)
 
     async def _verify_loop(self):
-        """Periodically verify peers are actually reachable."""
+        """Periodically verify peers are actually reachable.
+
+        Uses network-specific handshake verification for networks we run
+        (checks protocol magic bytes). Falls back to TCP-only for networks
+        we don't run (can only check if port is open).
+        """
         while True:
             await asyncio.sleep(EXTRACT_INTERVAL * 5)  # Less frequent than extraction
-            for name in self._networks:
+            # Verify all networks we have peers for, not just ones we run
+            all_networks = self.store.get_all_networks()
+            for name in all_networks:
                 try:
-                    await verify_peers(self.store, name)
+                    plugin = self._networks.get(name)  # None if we don't run it
+                    await verify_peers(self.store, name, network_plugin=plugin)
                 except Exception as e:
                     log.error("Verification error for %s: %s", name, e)
 

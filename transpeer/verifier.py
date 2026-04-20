@@ -4,18 +4,14 @@ import asyncio
 import logging
 
 from .config import VERIFY_CONCURRENCY, VERIFY_TIMEOUT
+from .networks.base import Network
 from .peerstore import Peer, PeerStore
 
 log = logging.getLogger(__name__)
 
 
-async def probe_peer(peer: Peer) -> bool:
-    """Check if a peer is reachable on its daemon port.
-
-    Does a TCP connect — if the port is open, the peer is likely running
-    the claimed daemon. Network-specific handshake verification can be
-    added per-network for stronger validation.
-    """
+async def probe_peer_tcp(peer: Peer) -> bool:
+    """Basic TCP connect check — is anything listening on the port?"""
     try:
         _, writer = await asyncio.wait_for(
             asyncio.open_connection(peer.addr, peer.port),
@@ -28,19 +24,29 @@ async def probe_peer(peer: Peer) -> bool:
         return False
 
 
-async def verify_peers(store: PeerStore, network: str):
-    """Verify all unverified peers for a network, and re-verify existing ones."""
+async def verify_peers(store: PeerStore, network: str,
+                       network_plugin: Network | None = None):
+    """Verify peers for a network.
+
+    If a network_plugin is provided, uses its verify_peer() method for
+    protocol-level handshake verification (e.g., checking levin signature
+    for Monero). Falls back to TCP-only if no plugin is available.
+    """
     peers = store.get_peers(network, verified_only=False)
     if not peers:
         return
 
-    log.info("Verifying %d peers for %s", len(peers), network)
+    log.info("Verifying %d peers for %s (mode: %s)", len(peers), network,
+             "handshake" if network_plugin else "tcp-only")
 
     semaphore = asyncio.Semaphore(VERIFY_CONCURRENCY)
 
     async def _verify_one(peer: Peer):
         async with semaphore:
-            alive = await probe_peer(peer)
+            if network_plugin:
+                alive = await network_plugin.verify_peer(peer.addr, peer.port)
+            else:
+                alive = await probe_peer_tcp(peer)
             if alive:
                 await store.mark_verified(peer.network, peer.addr, peer.port)
             else:
