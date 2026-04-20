@@ -18,6 +18,7 @@ class Peer:
     last_seen: int = 0
     sources: int = 1
     verified: bool = False
+    source_addr: str = ""  # transpeer that gave us this peer
     # PoW proof
     nonce: bytes = b""
     effort: int = 0
@@ -82,9 +83,50 @@ class TranspeerEntry:
 
 
 # Per-source transpeer limits
-MAX_PEERS_PER_SOURCE = 100  # Max peer entries accepted from a single transpeer
+BASE_PEERS_PER_SOURCE = 50  # Initial cap for a new source transpeer
+VERIFY_THRESHOLD = 0.8  # 80% alive to earn a cap increase
 DEAD_PEER_MAX_AGE = 3600  # Prune unverified/dead peers after 1 hour
 DEAD_PEER_COOLDOWN = 1800  # Don't re-accept a dead peer for 30 minutes
+
+
+@dataclass
+class SourceTrust:
+    """Tracks per-source acceptance cap based on verification results."""
+    cap: int = BASE_PEERS_PER_SOURCE
+    accepted: int = 0
+    verified_alive: int = 0
+    verified_dead: int = 0
+
+    @property
+    def total_verified(self) -> int:
+        return self.verified_alive + self.verified_dead
+
+    @property
+    def alive_rate(self) -> float:
+        if self.total_verified == 0:
+            return 0.0
+        return self.verified_alive / self.total_verified
+
+    def record_verification(self, alive: bool):
+        if alive:
+            self.verified_alive += 1
+        else:
+            self.verified_dead += 1
+
+    def maybe_expand(self):
+        """Expand cap if verification rate exceeds threshold."""
+        if self.total_verified >= 10 and self.alive_rate >= VERIFY_THRESHOLD:
+            self.cap += BASE_PEERS_PER_SOURCE
+            # Reset counters for next evaluation period
+            self.verified_alive = 0
+            self.verified_dead = 0
+
+    def maybe_contract(self):
+        """Contract cap if verification rate drops below threshold."""
+        if self.total_verified >= 10 and self.alive_rate < VERIFY_THRESHOLD:
+            self.cap = BASE_PEERS_PER_SOURCE
+            self.verified_alive = 0
+            self.verified_dead = 0
 
 
 class PeerStore:
@@ -94,7 +136,7 @@ class PeerStore:
         self._transpeers: dict[str, TranspeerEntry] = {}  # key -> TranspeerEntry
         self._candidates: dict[str, int] = {}  # addr -> timestamp (IPs that queried us)
         self._dead_peers: dict[str, int] = {}  # key -> timestamp of death (cooldown)
-        self._source_counts: dict[str, int] = {}  # source_addr -> count of peers accepted
+        self._source_trust: dict[str, SourceTrust] = {}  # source_addr -> trust info
         self._db: aiosqlite.Connection | None = None
         self._lock = asyncio.Lock()
 
@@ -153,6 +195,11 @@ class PeerStore:
 
     # -- Peers --
 
+    def get_source_trust(self, source_addr: str) -> SourceTrust:
+        if source_addr not in self._source_trust:
+            self._source_trust[source_addr] = SourceTrust()
+        return self._source_trust[source_addr]
+
     async def add_peer(self, peer: Peer, source_addr: str = "") -> bool:
         """Add or update a peer. Returns True if new."""
         async with self._lock:
@@ -162,10 +209,10 @@ class PeerStore:
             if death_time and now - death_time < DEAD_PEER_COOLDOWN:
                 return False
 
-            # Enforce per-source limit
+            # Enforce per-source ramp-up cap
             if source_addr:
-                count = self._source_counts.get(source_addr, 0)
-                if peer.key not in self._peers and count >= MAX_PEERS_PER_SOURCE:
+                trust = self.get_source_trust(source_addr)
+                if peer.key not in self._peers and trust.accepted >= trust.cap:
                     return False
 
             existing = self._peers.get(peer.key)
@@ -180,10 +227,12 @@ class PeerStore:
                 await self._save_peer(existing)
                 return False
             else:
+                if source_addr:
+                    peer.source_addr = source_addr
                 self._peers[peer.key] = peer
                 await self._save_peer(peer)
                 if source_addr:
-                    self._source_counts[source_addr] = self._source_counts.get(source_addr, 0) + 1
+                    self.get_source_trust(source_addr).accepted += 1
                 return True
 
     async def mark_verified(self, network: str, addr: str, port: int):
@@ -194,12 +243,22 @@ class PeerStore:
                 peer.verified = True
                 peer.last_seen = int(time.time())
                 await self._save_peer(peer)
+                if peer.source_addr:
+                    trust = self.get_source_trust(peer.source_addr)
+                    trust.record_verification(alive=True)
+                    trust.maybe_expand()
 
     async def mark_dead(self, network: str, addr: str, port: int):
         key = f"{network}:{addr}:{port}"
         async with self._lock:
             peer = self._peers.get(key)
             if peer:
+                # Record dead verification in source trust
+                if peer.source_addr:
+                    trust = self.get_source_trust(peer.source_addr)
+                    trust.record_verification(alive=False)
+                    trust.maybe_contract()
+
                 if peer.verified:
                     # Previously verified peer went offline — give it a chance
                     peer.sources = max(0, peer.sources - 1)

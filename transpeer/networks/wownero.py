@@ -16,12 +16,12 @@ class WowneroNetwork(Network):
     default_rpc_port = 34568
 
     async def extract_peers(self, rpc_host: str = "127.0.0.1") -> list[PeerInfo]:
-        """Get peer list from local wownerod via JSON-RPC."""
+        """Get currently connected peers from local wownerod."""
         url = f"http://{rpc_host}:{self.default_rpc_port}/json_rpc"
         payload = {
             "jsonrpc": "2.0",
             "id": "0",
-            "method": "get_peer_list",
+            "method": "get_connections",
         }
         try:
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
@@ -33,12 +33,12 @@ class WowneroNetwork(Network):
 
             result = data.get("result", {})
             peers = []
-            for entry in result.get("white_list", []):
-                host = entry.get("host", "")
-                port = entry.get("port", self.default_port)
+            for conn in result.get("connections", []):
+                host = conn.get("host", "") or conn.get("ip", "")
+                port = conn.get("port", "")
                 if host and port:
-                    peers.append(PeerInfo(addr=host, port=port))
-            log.info("Extracted %d Wownero peers from local daemon", len(peers))
+                    peers.append(PeerInfo(addr=host, port=int(port)))
+            log.info("Extracted %d connected Wownero peers", len(peers))
             return peers
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
             log.debug("Failed to query wownerod: %s", e)
