@@ -34,6 +34,7 @@ class Node:
         for spec in config.networks:
             try:
                 net = get_network(spec)
+                net.share_white_list = config.share_white_list
                 self._networks[net.name] = net
             except ValueError:
                 log.warning("Unknown network: %s", spec)

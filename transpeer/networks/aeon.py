@@ -16,29 +16,47 @@ class AeonNetwork(Network):
     default_rpc_port = 11181
 
     async def extract_peers(self, rpc_host: str = "127.0.0.1") -> list[PeerInfo]:
-        """Get currently connected peers from local aeond."""
+        if self.share_white_list:
+            return await self._extract_white_list(rpc_host)
+        return await self._extract_connections(rpc_host)
+
+    async def _extract_connections(self, rpc_host: str) -> list[PeerInfo]:
         url = f"http://{rpc_host}:{self.default_rpc_port}/json_rpc"
-        payload = {
-            "jsonrpc": "2.0",
-            "id": "0",
-            "method": "get_connections",
-        }
+        payload = {"jsonrpc": "2.0", "id": "0", "method": "get_connections"}
         try:
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
                 async with session.post(url, json=payload) as resp:
                     if resp.status != 200:
-                        log.warning("aeond RPC returned %d", resp.status)
                         return []
                     data = await resp.json()
-
-            result = data.get("result", {})
             peers = []
-            for conn in result.get("connections", []):
+            for conn in data.get("result", {}).get("connections", []):
                 host = conn.get("host", "") or conn.get("ip", "")
                 port = conn.get("port", "")
                 if host and port:
                     peers.append(PeerInfo(addr=host, port=int(port)))
             log.info("Extracted %d connected Aeon peers", len(peers))
+            return peers
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+            log.debug("Failed to query aeond: %s", e)
+            return []
+
+    async def _extract_white_list(self, rpc_host: str) -> list[PeerInfo]:
+        url = f"http://{rpc_host}:{self.default_rpc_port}/json_rpc"
+        payload = {"jsonrpc": "2.0", "id": "0", "method": "get_peer_list"}
+        try:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
+                async with session.post(url, json=payload) as resp:
+                    if resp.status != 200:
+                        return []
+                    data = await resp.json()
+            peers = []
+            for entry in data.get("result", {}).get("white_list", []):
+                host = entry.get("host", "")
+                port = entry.get("port", self.default_port)
+                if host and port:
+                    peers.append(PeerInfo(addr=host, port=port))
+            log.info("Extracted %d Aeon white list peers", len(peers))
             return peers
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
             log.debug("Failed to query aeond: %s", e)

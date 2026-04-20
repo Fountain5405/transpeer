@@ -41,6 +41,7 @@ class Config:
     in_memory: bool = False  # Skip SQLite, use in-memory only
     no_pow: bool = False  # Skip EquiX PoW (for simulation/testing)
     sim_pow: bool = False  # Use simulated PoW (sleep-based, Shadow-compatible)
+    share_white_list: bool = False  # Share full white list instead of connected peers
 
     def __post_init__(self):
         if not self.in_memory:
@@ -76,6 +77,10 @@ def parse_args() -> Config:
         "--sim-pow", action="store_true",
         help="Use simulated PoW (sleep-based, Shadow-compatible).",
     )
+    parser.add_argument(
+        "--share-white-list", action="store_true",
+        help="Share full daemon white list instead of connected peers only.",
+    )
     args = parser.parse_args()
     return Config(
         port=args.port,
@@ -87,4 +92,5 @@ def parse_args() -> Config:
         in_memory=args.in_memory,
         no_pow=args.no_pow,
         sim_pow=args.sim_pow,
+        share_white_list=args.share_white_list,
     )

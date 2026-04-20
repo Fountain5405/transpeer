@@ -14,6 +14,7 @@ class Network(ABC):
     name: str
     default_port: int
     default_rpc_port: int
+    share_white_list: bool = False  # If True, share full white list instead of connected peers
 
     @abstractmethod
     async def extract_peers(self, rpc_host: str = "127.0.0.1") -> list[PeerInfo]:
