@@ -13,3 +13,6 @@ build/
 # Data
 *.db
 .transpeer/
+
+# Shadow simulation output
+sim/shadow.data/
