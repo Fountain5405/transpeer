@@ -1,0 +1,8 @@
+# Transpeer attacker-ratio experiment
+# Total hosts: 600, simulated time: 900s, seed: 42
+# Started: Tue Apr 21 02:43:48 AM UTC 2026
+
+pct,honest,attackers,real_time_sec,peak_mem_mb,honest1_discovered,honest1_peer_store_final
+10,540,60,1115,30826,520,2232
+25,450,150,904,29779,518,2228
+50,300,300,573,27982,512,2228

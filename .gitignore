@@ -16,3 +16,6 @@ build/
 
 # Shadow simulation output
 sim/shadow.data/
+sim/tests/**/data/
+sim/tests/**/shadow.data/
+sim/tests/**/*.log

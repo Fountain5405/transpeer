@@ -115,7 +115,7 @@ def gen_config(num_honest, num_attackers, attacker_fake_peers, difficulty,
         args = (
             f"-m transpeer --bind 0.0.0.0 --port 7337 "
             f"--scan-range {scan_range} --difficulty {difficulty} "
-            f"--networks {nets_arg} --in-memory --no-pow --no-verify"
+            f"--networks {nets_arg} --in-memory --sim-pow --no-verify"
         )
         if static_peers_arg:
             args += f" --static-peers '{static_peers_arg}'"
@@ -153,7 +153,7 @@ def gen_config(num_honest, num_attackers, attacker_fake_peers, difficulty,
                     f"{TRANSPEER_PATH}/sim/attacker.py "
                     f"--target-network {target_net} --target-port {target_port} "
                     f"--num-fake-peers {attacker_fake_peers} "
-                    f"--port 7337 --difficulty {difficulty} --no-pow"
+                    f"--port 7337 --difficulty {difficulty} --sim-pow"
                 ),
                 "environment": {"PYTHONPATH": TRANSPEER_PATH, "PYTHONUNBUFFERED": "1"},
                 "start_time": "3s",
@@ -168,22 +168,34 @@ def main():
     parser = argparse.ArgumentParser(description="Generate scale test Shadow config")
     parser.add_argument("--honest", type=int, default=50)
     parser.add_argument("--attackers", type=int, default=5)
+    parser.add_argument("--total", type=int, default=None,
+                        help="Total hosts; split by --attacker-pct")
+    parser.add_argument("--attacker-pct", type=float, default=None,
+                        help="Percentage of hosts that are attackers (requires --total)")
     parser.add_argument("--fake-peers", type=int, default=100)
     parser.add_argument("--difficulty", type=int, default=100)
     parser.add_argument("--stop-time", type=int, default=600)
     parser.add_argument("--output", default="shadow_scale.yaml")
+    parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 
+    if args.total is not None and args.attacker_pct is not None:
+        num_attackers = round(args.total * args.attacker_pct / 100)
+        num_honest = args.total - num_attackers
+    else:
+        num_honest = args.honest
+        num_attackers = args.attackers
+
     config, total = gen_config(
-        args.honest, args.attackers, args.fake_peers,
-        args.difficulty, args.stop_time,
+        num_honest, num_attackers, args.fake_peers,
+        args.difficulty, args.stop_time, seed=args.seed,
     )
 
     with open(args.output, "w") as f:
         yaml.dump(config, f, default_flow_style=False, sort_keys=False)
 
     print(f"Generated {args.output}")
-    print(f"  {args.honest} honest + {args.attackers} attackers = {total} total hosts")
+    print(f"  {num_honest} honest + {num_attackers} attackers = {total} total hosts")
     print(f"  1 Python process per host (static peers, no separate daemons)")
     print(f"  Estimated memory: ~{total * 40} MB ({total * 40 / 1024:.1f} GB)")
 
