@@ -1,0 +1,326 @@
+general:
+  stop_time: 900s
+  model_unblocked_syscall_latency: true
+  parallelism: 8
+network:
+  graph:
+    type: gml
+    inline: "graph [\n  node [\n    id 0\n    label \"net0\"\n    bandwidth_down \"\
+      1 Gbit\"\n    bandwidth_up \"1 Gbit\"\n  ]\n  edge [\n    source 0\n    target\
+      \ 0\n    latency \"50 ms\"\n    packet_loss 0.0\n  ]\n]"
+hosts:
+  victim:
+    network_node_id: 0
+    bandwidth_down: 100 Mbit
+    bandwidth_up: 100 Mbit
+    ip_addr: 11.0.0.1
+    processes:
+    - path: python3
+      args: -m transpeer --bind 0.0.0.0 --port 7337 --scan-range 11.0.0.0/24 --difficulty
+        100 --networks p2pa:10000:10001 --in-memory --sim-pow --no-verify --static-peers
+        'p2pa:11.0.0.2:10000,11.0.0.3:10000,11.0.0.4:10000,11.0.0.5:10000,11.0.0.6:10000,11.0.0.7:10000,11.0.0.8:10000,11.0.0.9:10000,11.0.0.10:10000,11.0.0.11:10000,11.0.0.12:10000,11.0.0.13:10000,11.0.0.14:10000,11.0.0.15:10000,11.0.0.16:10000,11.0.0.17:10000,11.0.0.18:10000,11.0.0.19:10000,11.0.0.20:10000,11.0.0.21:10000'
+      environment:
+        PYTHONPATH: /home/lever65/transpeer
+        PYTHONUNBUFFERED: '1'
+      start_time: 3s
+      expected_final_state: running
+  honest1:
+    network_node_id: 0
+    bandwidth_down: 100 Mbit
+    bandwidth_up: 100 Mbit
+    ip_addr: 11.0.0.2
+    processes:
+    - path: python3
+      args: -m transpeer --bind 0.0.0.0 --port 7337 --scan-range 11.0.0.0/24 --difficulty
+        100 --networks p2pa:10000:10001 --in-memory --sim-pow --no-verify --static-peers
+        'p2pa:11.0.0.1:10000,11.0.0.3:10000,11.0.0.4:10000,11.0.0.5:10000,11.0.0.6:10000,11.0.0.7:10000,11.0.0.8:10000,11.0.0.9:10000,11.0.0.10:10000,11.0.0.11:10000,11.0.0.12:10000,11.0.0.13:10000,11.0.0.14:10000,11.0.0.15:10000,11.0.0.16:10000,11.0.0.17:10000,11.0.0.18:10000,11.0.0.19:10000,11.0.0.20:10000,11.0.0.21:10000'
+      environment:
+        PYTHONPATH: /home/lever65/transpeer
+        PYTHONUNBUFFERED: '1'
+      start_time: 3s
+      expected_final_state: running
+  honest2:
+    network_node_id: 0
+    bandwidth_down: 100 Mbit
+    bandwidth_up: 100 Mbit
+    ip_addr: 11.0.0.3
+    processes:
+    - path: python3
+      args: -m transpeer --bind 0.0.0.0 --port 7337 --scan-range 11.0.0.0/24 --difficulty
+        100 --networks p2pa:10000:10001 --in-memory --sim-pow --no-verify --static-peers
+        'p2pa:11.0.0.1:10000,11.0.0.2:10000,11.0.0.4:10000,11.0.0.5:10000,11.0.0.6:10000,11.0.0.7:10000,11.0.0.8:10000,11.0.0.9:10000,11.0.0.10:10000,11.0.0.11:10000,11.0.0.12:10000,11.0.0.13:10000,11.0.0.14:10000,11.0.0.15:10000,11.0.0.16:10000,11.0.0.17:10000,11.0.0.18:10000,11.0.0.19:10000,11.0.0.20:10000,11.0.0.21:10000'
+      environment:
+        PYTHONPATH: /home/lever65/transpeer
+        PYTHONUNBUFFERED: '1'
+      start_time: 3s
+      expected_final_state: running
+  honest3:
+    network_node_id: 0
+    bandwidth_down: 100 Mbit
+    bandwidth_up: 100 Mbit
+    ip_addr: 11.0.0.4
+    processes:
+    - path: python3
+      args: -m transpeer --bind 0.0.0.0 --port 7337 --scan-range 11.0.0.0/24 --difficulty
+        100 --networks p2pa:10000:10001 --in-memory --sim-pow --no-verify --static-peers
+        'p2pa:11.0.0.1:10000,11.0.0.2:10000,11.0.0.3:10000,11.0.0.5:10000,11.0.0.6:10000,11.0.0.7:10000,11.0.0.8:10000,11.0.0.9:10000,11.0.0.10:10000,11.0.0.11:10000,11.0.0.12:10000,11.0.0.13:10000,11.0.0.14:10000,11.0.0.15:10000,11.0.0.16:10000,11.0.0.17:10000,11.0.0.18:10000,11.0.0.19:10000,11.0.0.20:10000,11.0.0.21:10000'
+      environment:
+        PYTHONPATH: /home/lever65/transpeer
+        PYTHONUNBUFFERED: '1'
+      start_time: 3s
+      expected_final_state: running
+  honest4:
+    network_node_id: 0
+    bandwidth_down: 100 Mbit
+    bandwidth_up: 100 Mbit
+    ip_addr: 11.0.0.5
+    processes:
+    - path: python3
+      args: -m transpeer --bind 0.0.0.0 --port 7337 --scan-range 11.0.0.0/24 --difficulty
+        100 --networks p2pa:10000:10001 --in-memory --sim-pow --no-verify --static-peers
+        'p2pa:11.0.0.1:10000,11.0.0.2:10000,11.0.0.3:10000,11.0.0.4:10000,11.0.0.6:10000,11.0.0.7:10000,11.0.0.8:10000,11.0.0.9:10000,11.0.0.10:10000,11.0.0.11:10000,11.0.0.12:10000,11.0.0.13:10000,11.0.0.14:10000,11.0.0.15:10000,11.0.0.16:10000,11.0.0.17:10000,11.0.0.18:10000,11.0.0.19:10000,11.0.0.20:10000,11.0.0.21:10000'
+      environment:
+        PYTHONPATH: /home/lever65/transpeer
+        PYTHONUNBUFFERED: '1'
+      start_time: 3s
+      expected_final_state: running
+  honest5:
+    network_node_id: 0
+    bandwidth_down: 100 Mbit
+    bandwidth_up: 100 Mbit
+    ip_addr: 11.0.0.6
+    processes:
+    - path: python3
+      args: -m transpeer --bind 0.0.0.0 --port 7337 --scan-range 11.0.0.0/24 --difficulty
+        100 --networks p2pa:10000:10001 --in-memory --sim-pow --no-verify --static-peers
+        'p2pa:11.0.0.1:10000,11.0.0.2:10000,11.0.0.3:10000,11.0.0.4:10000,11.0.0.5:10000,11.0.0.7:10000,11.0.0.8:10000,11.0.0.9:10000,11.0.0.10:10000,11.0.0.11:10000,11.0.0.12:10000,11.0.0.13:10000,11.0.0.14:10000,11.0.0.15:10000,11.0.0.16:10000,11.0.0.17:10000,11.0.0.18:10000,11.0.0.19:10000,11.0.0.20:10000,11.0.0.21:10000'
+      environment:
+        PYTHONPATH: /home/lever65/transpeer
+        PYTHONUNBUFFERED: '1'
+      start_time: 3s
+      expected_final_state: running
+  honest6:
+    network_node_id: 0
+    bandwidth_down: 100 Mbit
+    bandwidth_up: 100 Mbit
+    ip_addr: 11.0.0.7
+    processes:
+    - path: python3
+      args: -m transpeer --bind 0.0.0.0 --port 7337 --scan-range 11.0.0.0/24 --difficulty
+        100 --networks p2pa:10000:10001 --in-memory --sim-pow --no-verify --static-peers
+        'p2pa:11.0.0.1:10000,11.0.0.2:10000,11.0.0.3:10000,11.0.0.4:10000,11.0.0.5:10000,11.0.0.6:10000,11.0.0.8:10000,11.0.0.9:10000,11.0.0.10:10000,11.0.0.11:10000,11.0.0.12:10000,11.0.0.13:10000,11.0.0.14:10000,11.0.0.15:10000,11.0.0.16:10000,11.0.0.17:10000,11.0.0.18:10000,11.0.0.19:10000,11.0.0.20:10000,11.0.0.21:10000'
+      environment:
+        PYTHONPATH: /home/lever65/transpeer
+        PYTHONUNBUFFERED: '1'
+      start_time: 3s
+      expected_final_state: running
+  honest7:
+    network_node_id: 0
+    bandwidth_down: 100 Mbit
+    bandwidth_up: 100 Mbit
+    ip_addr: 11.0.0.8
+    processes:
+    - path: python3
+      args: -m transpeer --bind 0.0.0.0 --port 7337 --scan-range 11.0.0.0/24 --difficulty
+        100 --networks p2pa:10000:10001 --in-memory --sim-pow --no-verify --static-peers
+        'p2pa:11.0.0.1:10000,11.0.0.2:10000,11.0.0.3:10000,11.0.0.4:10000,11.0.0.5:10000,11.0.0.6:10000,11.0.0.7:10000,11.0.0.9:10000,11.0.0.10:10000,11.0.0.11:10000,11.0.0.12:10000,11.0.0.13:10000,11.0.0.14:10000,11.0.0.15:10000,11.0.0.16:10000,11.0.0.17:10000,11.0.0.18:10000,11.0.0.19:10000,11.0.0.20:10000,11.0.0.21:10000'
+      environment:
+        PYTHONPATH: /home/lever65/transpeer
+        PYTHONUNBUFFERED: '1'
+      start_time: 3s
+      expected_final_state: running
+  honest8:
+    network_node_id: 0
+    bandwidth_down: 100 Mbit
+    bandwidth_up: 100 Mbit
+    ip_addr: 11.0.0.9
+    processes:
+    - path: python3
+      args: -m transpeer --bind 0.0.0.0 --port 7337 --scan-range 11.0.0.0/24 --difficulty
+        100 --networks p2pa:10000:10001 --in-memory --sim-pow --no-verify --static-peers
+        'p2pa:11.0.0.1:10000,11.0.0.2:10000,11.0.0.3:10000,11.0.0.4:10000,11.0.0.5:10000,11.0.0.6:10000,11.0.0.7:10000,11.0.0.8:10000,11.0.0.10:10000,11.0.0.11:10000,11.0.0.12:10000,11.0.0.13:10000,11.0.0.14:10000,11.0.0.15:10000,11.0.0.16:10000,11.0.0.17:10000,11.0.0.18:10000,11.0.0.19:10000,11.0.0.20:10000,11.0.0.21:10000'
+      environment:
+        PYTHONPATH: /home/lever65/transpeer
+        PYTHONUNBUFFERED: '1'
+      start_time: 3s
+      expected_final_state: running
+  honest9:
+    network_node_id: 0
+    bandwidth_down: 100 Mbit
+    bandwidth_up: 100 Mbit
+    ip_addr: 11.0.0.10
+    processes:
+    - path: python3
+      args: -m transpeer --bind 0.0.0.0 --port 7337 --scan-range 11.0.0.0/24 --difficulty
+        100 --networks p2pa:10000:10001 --in-memory --sim-pow --no-verify --static-peers
+        'p2pa:11.0.0.1:10000,11.0.0.2:10000,11.0.0.3:10000,11.0.0.4:10000,11.0.0.5:10000,11.0.0.6:10000,11.0.0.7:10000,11.0.0.8:10000,11.0.0.9:10000,11.0.0.11:10000,11.0.0.12:10000,11.0.0.13:10000,11.0.0.14:10000,11.0.0.15:10000,11.0.0.16:10000,11.0.0.17:10000,11.0.0.18:10000,11.0.0.19:10000,11.0.0.20:10000,11.0.0.21:10000'
+      environment:
+        PYTHONPATH: /home/lever65/transpeer
+        PYTHONUNBUFFERED: '1'
+      start_time: 3s
+      expected_final_state: running
+  honest10:
+    network_node_id: 0
+    bandwidth_down: 100 Mbit
+    bandwidth_up: 100 Mbit
+    ip_addr: 11.0.0.11
+    processes:
+    - path: python3
+      args: -m transpeer --bind 0.0.0.0 --port 7337 --scan-range 11.0.0.0/24 --difficulty
+        100 --networks p2pa:10000:10001 --in-memory --sim-pow --no-verify --static-peers
+        'p2pa:11.0.0.1:10000,11.0.0.2:10000,11.0.0.3:10000,11.0.0.4:10000,11.0.0.5:10000,11.0.0.6:10000,11.0.0.7:10000,11.0.0.8:10000,11.0.0.9:10000,11.0.0.10:10000,11.0.0.12:10000,11.0.0.13:10000,11.0.0.14:10000,11.0.0.15:10000,11.0.0.16:10000,11.0.0.17:10000,11.0.0.18:10000,11.0.0.19:10000,11.0.0.20:10000,11.0.0.21:10000'
+      environment:
+        PYTHONPATH: /home/lever65/transpeer
+        PYTHONUNBUFFERED: '1'
+      start_time: 3s
+      expected_final_state: running
+  honest11:
+    network_node_id: 0
+    bandwidth_down: 100 Mbit
+    bandwidth_up: 100 Mbit
+    ip_addr: 11.0.0.12
+    processes:
+    - path: python3
+      args: -m transpeer --bind 0.0.0.0 --port 7337 --scan-range 11.0.0.0/24 --difficulty
+        100 --networks p2pa:10000:10001 --in-memory --sim-pow --no-verify --static-peers
+        'p2pa:11.0.0.1:10000,11.0.0.2:10000,11.0.0.3:10000,11.0.0.4:10000,11.0.0.5:10000,11.0.0.6:10000,11.0.0.7:10000,11.0.0.8:10000,11.0.0.9:10000,11.0.0.10:10000,11.0.0.11:10000,11.0.0.13:10000,11.0.0.14:10000,11.0.0.15:10000,11.0.0.16:10000,11.0.0.17:10000,11.0.0.18:10000,11.0.0.19:10000,11.0.0.20:10000,11.0.0.21:10000'
+      environment:
+        PYTHONPATH: /home/lever65/transpeer
+        PYTHONUNBUFFERED: '1'
+      start_time: 3s
+      expected_final_state: running
+  honest12:
+    network_node_id: 0
+    bandwidth_down: 100 Mbit
+    bandwidth_up: 100 Mbit
+    ip_addr: 11.0.0.13
+    processes:
+    - path: python3
+      args: -m transpeer --bind 0.0.0.0 --port 7337 --scan-range 11.0.0.0/24 --difficulty
+        100 --networks p2pa:10000:10001 --in-memory --sim-pow --no-verify --static-peers
+        'p2pa:11.0.0.1:10000,11.0.0.2:10000,11.0.0.3:10000,11.0.0.4:10000,11.0.0.5:10000,11.0.0.6:10000,11.0.0.7:10000,11.0.0.8:10000,11.0.0.9:10000,11.0.0.10:10000,11.0.0.11:10000,11.0.0.12:10000,11.0.0.14:10000,11.0.0.15:10000,11.0.0.16:10000,11.0.0.17:10000,11.0.0.18:10000,11.0.0.19:10000,11.0.0.20:10000,11.0.0.21:10000'
+      environment:
+        PYTHONPATH: /home/lever65/transpeer
+        PYTHONUNBUFFERED: '1'
+      start_time: 3s
+      expected_final_state: running
+  honest13:
+    network_node_id: 0
+    bandwidth_down: 100 Mbit
+    bandwidth_up: 100 Mbit
+    ip_addr: 11.0.0.14
+    processes:
+    - path: python3
+      args: -m transpeer --bind 0.0.0.0 --port 7337 --scan-range 11.0.0.0/24 --difficulty
+        100 --networks p2pa:10000:10001 --in-memory --sim-pow --no-verify --static-peers
+        'p2pa:11.0.0.1:10000,11.0.0.2:10000,11.0.0.3:10000,11.0.0.4:10000,11.0.0.5:10000,11.0.0.6:10000,11.0.0.7:10000,11.0.0.8:10000,11.0.0.9:10000,11.0.0.10:10000,11.0.0.11:10000,11.0.0.12:10000,11.0.0.13:10000,11.0.0.15:10000,11.0.0.16:10000,11.0.0.17:10000,11.0.0.18:10000,11.0.0.19:10000,11.0.0.20:10000,11.0.0.21:10000'
+      environment:
+        PYTHONPATH: /home/lever65/transpeer
+        PYTHONUNBUFFERED: '1'
+      start_time: 3s
+      expected_final_state: running
+  honest14:
+    network_node_id: 0
+    bandwidth_down: 100 Mbit
+    bandwidth_up: 100 Mbit
+    ip_addr: 11.0.0.15
+    processes:
+    - path: python3
+      args: -m transpeer --bind 0.0.0.0 --port 7337 --scan-range 11.0.0.0/24 --difficulty
+        100 --networks p2pa:10000:10001 --in-memory --sim-pow --no-verify --static-peers
+        'p2pa:11.0.0.1:10000,11.0.0.2:10000,11.0.0.3:10000,11.0.0.4:10000,11.0.0.5:10000,11.0.0.6:10000,11.0.0.7:10000,11.0.0.8:10000,11.0.0.9:10000,11.0.0.10:10000,11.0.0.11:10000,11.0.0.12:10000,11.0.0.13:10000,11.0.0.14:10000,11.0.0.16:10000,11.0.0.17:10000,11.0.0.18:10000,11.0.0.19:10000,11.0.0.20:10000,11.0.0.21:10000'
+      environment:
+        PYTHONPATH: /home/lever65/transpeer
+        PYTHONUNBUFFERED: '1'
+      start_time: 3s
+      expected_final_state: running
+  honest15:
+    network_node_id: 0
+    bandwidth_down: 100 Mbit
+    bandwidth_up: 100 Mbit
+    ip_addr: 11.0.0.16
+    processes:
+    - path: python3
+      args: -m transpeer --bind 0.0.0.0 --port 7337 --scan-range 11.0.0.0/24 --difficulty
+        100 --networks p2pa:10000:10001 --in-memory --sim-pow --no-verify --static-peers
+        'p2pa:11.0.0.1:10000,11.0.0.2:10000,11.0.0.3:10000,11.0.0.4:10000,11.0.0.5:10000,11.0.0.6:10000,11.0.0.7:10000,11.0.0.8:10000,11.0.0.9:10000,11.0.0.10:10000,11.0.0.11:10000,11.0.0.12:10000,11.0.0.13:10000,11.0.0.14:10000,11.0.0.15:10000,11.0.0.17:10000,11.0.0.18:10000,11.0.0.19:10000,11.0.0.20:10000,11.0.0.21:10000'
+      environment:
+        PYTHONPATH: /home/lever65/transpeer
+        PYTHONUNBUFFERED: '1'
+      start_time: 3s
+      expected_final_state: running
+  honest16:
+    network_node_id: 0
+    bandwidth_down: 100 Mbit
+    bandwidth_up: 100 Mbit
+    ip_addr: 11.0.0.17
+    processes:
+    - path: python3
+      args: -m transpeer --bind 0.0.0.0 --port 7337 --scan-range 11.0.0.0/24 --difficulty
+        100 --networks p2pa:10000:10001 --in-memory --sim-pow --no-verify --static-peers
+        'p2pa:11.0.0.1:10000,11.0.0.2:10000,11.0.0.3:10000,11.0.0.4:10000,11.0.0.5:10000,11.0.0.6:10000,11.0.0.7:10000,11.0.0.8:10000,11.0.0.9:10000,11.0.0.10:10000,11.0.0.11:10000,11.0.0.12:10000,11.0.0.13:10000,11.0.0.14:10000,11.0.0.15:10000,11.0.0.16:10000,11.0.0.18:10000,11.0.0.19:10000,11.0.0.20:10000,11.0.0.21:10000'
+      environment:
+        PYTHONPATH: /home/lever65/transpeer
+        PYTHONUNBUFFERED: '1'
+      start_time: 3s
+      expected_final_state: running
+  honest17:
+    network_node_id: 0
+    bandwidth_down: 100 Mbit
+    bandwidth_up: 100 Mbit
+    ip_addr: 11.0.0.18
+    processes:
+    - path: python3
+      args: -m transpeer --bind 0.0.0.0 --port 7337 --scan-range 11.0.0.0/24 --difficulty
+        100 --networks p2pa:10000:10001 --in-memory --sim-pow --no-verify --static-peers
+        'p2pa:11.0.0.1:10000,11.0.0.2:10000,11.0.0.3:10000,11.0.0.4:10000,11.0.0.5:10000,11.0.0.6:10000,11.0.0.7:10000,11.0.0.8:10000,11.0.0.9:10000,11.0.0.10:10000,11.0.0.11:10000,11.0.0.12:10000,11.0.0.13:10000,11.0.0.14:10000,11.0.0.15:10000,11.0.0.16:10000,11.0.0.17:10000,11.0.0.19:10000,11.0.0.20:10000,11.0.0.21:10000'
+      environment:
+        PYTHONPATH: /home/lever65/transpeer
+        PYTHONUNBUFFERED: '1'
+      start_time: 3s
+      expected_final_state: running
+  honest18:
+    network_node_id: 0
+    bandwidth_down: 100 Mbit
+    bandwidth_up: 100 Mbit
+    ip_addr: 11.0.0.19
+    processes:
+    - path: python3
+      args: -m transpeer --bind 0.0.0.0 --port 7337 --scan-range 11.0.0.0/24 --difficulty
+        100 --networks p2pa:10000:10001 --in-memory --sim-pow --no-verify --static-peers
+        'p2pa:11.0.0.1:10000,11.0.0.2:10000,11.0.0.3:10000,11.0.0.4:10000,11.0.0.5:10000,11.0.0.6:10000,11.0.0.7:10000,11.0.0.8:10000,11.0.0.9:10000,11.0.0.10:10000,11.0.0.11:10000,11.0.0.12:10000,11.0.0.13:10000,11.0.0.14:10000,11.0.0.15:10000,11.0.0.16:10000,11.0.0.17:10000,11.0.0.18:10000,11.0.0.20:10000,11.0.0.21:10000'
+      environment:
+        PYTHONPATH: /home/lever65/transpeer
+        PYTHONUNBUFFERED: '1'
+      start_time: 3s
+      expected_final_state: running
+  honest19:
+    network_node_id: 0
+    bandwidth_down: 100 Mbit
+    bandwidth_up: 100 Mbit
+    ip_addr: 11.0.0.20
+    processes:
+    - path: python3
+      args: -m transpeer --bind 0.0.0.0 --port 7337 --scan-range 11.0.0.0/24 --difficulty
+        100 --networks p2pa:10000:10001 --in-memory --sim-pow --no-verify --static-peers
+        'p2pa:11.0.0.1:10000,11.0.0.2:10000,11.0.0.3:10000,11.0.0.4:10000,11.0.0.5:10000,11.0.0.6:10000,11.0.0.7:10000,11.0.0.8:10000,11.0.0.9:10000,11.0.0.10:10000,11.0.0.11:10000,11.0.0.12:10000,11.0.0.13:10000,11.0.0.14:10000,11.0.0.15:10000,11.0.0.16:10000,11.0.0.17:10000,11.0.0.18:10000,11.0.0.19:10000,11.0.0.21:10000'
+      environment:
+        PYTHONPATH: /home/lever65/transpeer
+        PYTHONUNBUFFERED: '1'
+      start_time: 3s
+      expected_final_state: running
+  honest20:
+    network_node_id: 0
+    bandwidth_down: 100 Mbit
+    bandwidth_up: 100 Mbit
+    ip_addr: 11.0.0.21
+    processes:
+    - path: python3
+      args: -m transpeer --bind 0.0.0.0 --port 7337 --scan-range 11.0.0.0/24 --difficulty
+        100 --networks p2pa:10000:10001 --in-memory --sim-pow --no-verify --static-peers
+        'p2pa:11.0.0.1:10000,11.0.0.2:10000,11.0.0.3:10000,11.0.0.4:10000,11.0.0.5:10000,11.0.0.6:10000,11.0.0.7:10000,11.0.0.8:10000,11.0.0.9:10000,11.0.0.10:10000,11.0.0.11:10000,11.0.0.12:10000,11.0.0.13:10000,11.0.0.14:10000,11.0.0.15:10000,11.0.0.16:10000,11.0.0.17:10000,11.0.0.18:10000,11.0.0.19:10000,11.0.0.20:10000'
+      environment:
+        PYTHONPATH: /home/lever65/transpeer
+        PYTHONUNBUFFERED: '1'
+      start_time: 3s
+      expected_final_state: running

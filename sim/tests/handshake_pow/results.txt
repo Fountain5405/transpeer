@@ -1,0 +1,10 @@
+# Transpeer handshake-PoW experiment
+# Honest: 20, simulated time: 900s
+# Started: Tue Apr 21 11:25:50 AM UTC 2026
+
+scenario,real_time_sec,victim_peak_difficulty,flooder_total_200,flooder_total_402,flooder_total_429,flooder_pow_solves,flooder_pow_time
+A_baseline,7,0,0,0,0,0,0
+B_distributed_low,10,462,1137,6139,0,0,0
+C_distributed_med,14,935,844,14153,0,0,0
+D_distributed_high,19,1000,1412,22941,0,0,0
+E_dist_high_solving,21,1000,23286,100,0,100,420.0

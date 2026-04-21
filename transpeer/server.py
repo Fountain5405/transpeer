@@ -1,6 +1,7 @@
 """HTTP server for the transpeer protocol."""
 
 import base64
+import logging
 import time
 from collections import defaultdict, deque
 
@@ -14,27 +15,37 @@ from .peerstore import PeerStore
 from .pow import verify_handshake
 
 # Adaptive handshake PoW parameters
-LOAD_WINDOW_SECS = 60  # track abuse signals over 60s
-LOAD_THRESHOLD = 30  # rate-limit hits per window before activating PoW
+LOAD_WINDOW_SECS = 60  # track request volume over 60s
+LOAD_THRESHOLD = 300  # total requests per window before activating PoW
 HANDSHAKE_MIN_EFFORT = 10
 HANDSHAKE_MAX_EFFORT = 1000
 
 
 class LoadTracker:
-    """Tracks abuse signals to drive adaptive handshake PoW difficulty."""
+    """Tracks abuse signals to drive adaptive handshake PoW difficulty.
+
+    Signal: total request volume (all endpoints combined) per minute.
+    Normal gossip-loop activity is bounded (~20-80 req/min even in a busy
+    network), so a threshold of 300/min reliably catches distributed
+    floods that individually stay under the per-IP rate limit.
+    """
 
     def __init__(self):
-        self._rate_limit_hits: deque[float] = deque()
+        self._requests: deque[float] = deque()
         self._last_recompute = 0.0
         self._current_difficulty = 0
 
+    def record_request(self):
+        self._requests.append(time.time())
+
+    # Kept for backward compat; now just forwards to record_request
     def record_rate_limit_hit(self):
-        self._rate_limit_hits.append(time.time())
+        pass  # rate-limit hits are already counted via record_request
 
     def _prune(self, now: float):
         cutoff = now - LOAD_WINDOW_SECS
-        while self._rate_limit_hits and self._rate_limit_hits[0] < cutoff:
-            self._rate_limit_hits.popleft()
+        while self._requests and self._requests[0] < cutoff:
+            self._requests.popleft()
 
     def current_difficulty(self) -> int:
         """Return current required handshake PoW effort (0 = dormant)."""
@@ -44,16 +55,23 @@ class LoadTracker:
         self._last_recompute = now
         self._prune(now)
 
-        hits = len(self._rate_limit_hits)
-        if hits < LOAD_THRESHOLD:
+        rate = len(self._requests)
+        prev = self._current_difficulty
+        if rate < LOAD_THRESHOLD:
             self._current_difficulty = 0
         else:
             # Scale: LOAD_THRESHOLD = HANDSHAKE_MIN_EFFORT, 10x threshold = MAX
-            scale = (hits - LOAD_THRESHOLD) / (9 * LOAD_THRESHOLD)
+            scale = (rate - LOAD_THRESHOLD) / (9 * LOAD_THRESHOLD)
             effort = HANDSHAKE_MIN_EFFORT + int(
                 scale * (HANDSHAKE_MAX_EFFORT - HANDSHAKE_MIN_EFFORT)
             )
             self._current_difficulty = min(HANDSHAKE_MAX_EFFORT, effort)
+
+        if prev != self._current_difficulty:
+            logging.getLogger("transpeer.server").info(
+                "HANDSHAKE_DIFFICULTY: %d -> %d (rate=%d/%ds)",
+                prev, self._current_difficulty, rate, LOAD_WINDOW_SECS,
+            )
         return self._current_difficulty
 
 
@@ -70,11 +88,11 @@ class TranspeerServer:
 
     def _check_rate_limit(self, addr: str) -> bool:
         now = time.time()
+        # Record every request (including rate-limited ones) for load tracking
+        self.load_tracker.record_request()
         timestamps = self._rate_limits[addr]
-        # Purge old entries
         self._rate_limits[addr] = [t for t in timestamps if now - t < RATE_LIMIT_WINDOW]
         if len(self._rate_limits[addr]) >= RATE_LIMIT_REQUESTS:
-            self.load_tracker.record_rate_limit_hit()
             return False
         self._rate_limits[addr].append(now)
         return True
