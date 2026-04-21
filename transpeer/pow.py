@@ -75,6 +75,23 @@ def build_challenge(network: str, addr: str, port: int, timestamp_bucket: int | 
     return hashlib.blake2b(data, digest_size=32).digest()
 
 
+# Handshake PoW — bucket is 1 hour for faster turnover under attack
+HANDSHAKE_BUCKET_SECS = 3600
+
+
+def build_handshake_challenge(client_ip: str, server_node_id: str,
+                              bucket: int | None = None) -> bytes:
+    """Build a handshake PoW challenge bound to client IP, time bucket, and server node.
+
+    This prevents reuse across different clients and makes the proof expire.
+    A client can cache a valid proof for ~1 hour of requests to the same server.
+    """
+    if bucket is None:
+        bucket = int(time.time()) // HANDSHAKE_BUCKET_SECS
+    data = f"handshake:{client_ip}:{server_node_id}:{bucket}".encode()
+    return hashlib.blake2b(data, digest_size=32).digest()
+
+
 def _check_difficulty(challenge: bytes, nonce: bytes, solution_bytes: bytes, effort: int) -> bool:
     h = hashlib.blake2b(challenge + nonce + solution_bytes, digest_size=4).digest()
     r = struct.unpack("<I", h)[0]
@@ -209,6 +226,73 @@ def verify(network: str, addr: str, port: int, nonce: bytes,
         if result != EQUIX_OK:
             return False
 
+        return _check_difficulty(challenge, nonce, solution_bytes, effort)
+    finally:
+        lib.equix_free(ctx)
+
+
+def solve_handshake(client_ip: str, server_node_id: str, effort: int,
+                    simulated: bool = False) -> tuple[bytes, bytes, int]:
+    """Solve an EquiX PoW for a handshake challenge.
+
+    Returns (nonce, solution_bytes, bucket).
+    """
+    bucket = int(time.time()) // HANDSHAKE_BUCKET_SECS
+
+    if simulated:
+        time.sleep(_estimated_solve_time(effort))
+        nonce = _SIM_PROOF_MAGIC + os.urandom(10)
+        solution = os.urandom(16)
+        return nonce, solution, bucket
+
+    lib = _load_lib()
+    ctx = lib.equix_alloc(EQUIX_CTX_SOLVE)
+    if not ctx:
+        raise RuntimeError("Failed to allocate EquiX solve context")
+
+    try:
+        challenge = build_handshake_challenge(client_ip, server_node_id, bucket)
+        nonce_counter = 0
+        while True:
+            nonce = struct.pack("<Q", nonce_counter) + os.urandom(8)
+            full_challenge = challenge + nonce
+
+            solutions = (EquixSolution * EQUIX_MAX_SOLS)()
+            num_sols = lib.equix_solve(
+                ctx, full_challenge, len(full_challenge), solutions,
+            )
+            for i in range(num_sols):
+                sol_bytes = _solution_to_bytes(solutions[i])
+                if _check_difficulty(challenge, nonce, sol_bytes, effort):
+                    return nonce, sol_bytes, bucket
+            nonce_counter += 1
+    finally:
+        lib.equix_free(ctx)
+
+
+def verify_handshake(client_ip: str, server_node_id: str, nonce: bytes,
+                     effort: int, solution_bytes: bytes, bucket: int,
+                     accept_simulated: bool = False) -> bool:
+    """Verify an EquiX handshake PoW."""
+    # Fast path for simulation: tagged proofs accepted if bucket is current/previous
+    current = int(time.time()) // HANDSHAKE_BUCKET_SECS
+    if bucket not in (current, current - 1):
+        return False
+
+    if accept_simulated and nonce[:len(_SIM_PROOF_MAGIC)] == _SIM_PROOF_MAGIC:
+        return True
+
+    lib = _load_lib()
+    ctx = lib.equix_alloc(EQUIX_CTX_VERIFY)
+    if not ctx:
+        raise RuntimeError("Failed to allocate EquiX verify context")
+    try:
+        challenge = build_handshake_challenge(client_ip, server_node_id, bucket)
+        full_challenge = challenge + nonce
+        sol = _bytes_to_solution(solution_bytes)
+        result = lib.equix_verify(ctx, full_challenge, len(full_challenge), ctypes.byref(sol))
+        if result != EQUIX_OK:
+            return False
         return _check_difficulty(challenge, nonce, solution_bytes, effort)
     finally:
         lib.equix_free(ctx)
