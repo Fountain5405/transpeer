@@ -19,3 +19,8 @@ sim/shadow.data/
 sim/tests/**/data/
 sim/tests/**/shadow.data/
 sim/tests/**/*.log
+
+# Scratch configs from ad-hoc sim runs (regenerate via gen_*.py)
+sim/shadow_scale_*.yaml
+sim/shadow_attacker.yaml
+sim/shadow_crossnet.yaml
