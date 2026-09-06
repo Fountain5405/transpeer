@@ -15,7 +15,18 @@ import argparse
 import random
 import yaml
 
-TRANSPEER_PATH = "/home/lever65/transpeer"
+import os
+from pathlib import Path
+
+# Repo root derived from this file's location; override with TRANSPEER_DIR.
+TRANSPEER_PATH = os.environ.get(
+    "TRANSPEER_DIR", str(Path(__file__).resolve().parent.parent))
+# The system python3 on some hosts is too old for this codebase (needs 3.10+).
+# simenv.sh points this at the project venv.
+PYTHON_BIN = os.environ.get("TRANSPEER_PYTHON", "python3")
+# Shadow worker threads; the box has 64. Override with SIM_PARALLELISM.
+SIM_PARALLELISM = int(os.environ.get("SIM_PARALLELISM", "60"))
+
 NETWORKS = [f"p2p{chr(ord('a') + i)}" for i in range(10)]
 
 
@@ -64,7 +75,9 @@ def gen_config(num_honest, num_attackers, attacker_fake_peers, difficulty,
         "general": {
             "stop_time": f"{stop_time}s",
             "model_unblocked_syscall_latency": True,
-            "parallelism": min(24, max(4, total // 100)),
+            # Shadow is deterministic regardless of worker count, so this only
+            # affects wall-clock. Use all configured workers, capped by host count.
+            "parallelism": min(SIM_PARALLELISM, max(4, total)),
         },
         "network": {
             "graph": {
@@ -126,7 +139,7 @@ def gen_config(num_honest, num_attackers, attacker_fake_peers, difficulty,
             "bandwidth_up": "100 Mbit",
             "ip_addr": ip,
             "processes": [{
-                "path": "python3",
+                "path": PYTHON_BIN,
                 "args": args,
                 "environment": {"PYTHONPATH": TRANSPEER_PATH, "PYTHONUNBUFFERED": "1"},
                 "start_time": "3s",
@@ -148,7 +161,7 @@ def gen_config(num_honest, num_attackers, attacker_fake_peers, difficulty,
             "bandwidth_up": "100 Mbit",
             "ip_addr": ip,
             "processes": [{
-                "path": "python3",
+                "path": PYTHON_BIN,
                 "args": (
                     f"{TRANSPEER_PATH}/sim/attacker.py "
                     f"--target-network {target_net} --target-port {target_port} "

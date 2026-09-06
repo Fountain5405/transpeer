@@ -10,8 +10,11 @@ set -u
 TOTAL=600
 STOP_TIME=900  # 15 minutes simulated — gives 3 query cycles
 SEED=42
-TRANSPEER_DIR="/home/lever65/transpeer"
-SHADOW_BIN="/home/lever65/monerosim_dev/shadowformonero/build/src/main/shadow"
+# Machine-specific paths (shadow binary, interpreter, storage) live in
+# sim/simenv.sh. Override any of them from the environment.
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../../simenv.sh"
+simenv_check || exit 1
+simenv_check_space
 TEST_DIR="$TRANSPEER_DIR/sim/tests/attacker_ratio"
 RESULTS="$TEST_DIR/results.txt"
 
@@ -33,10 +36,11 @@ for pct in "${PERCENTAGES[@]}"; do
     echo "=========================================="
 
     CONFIG="configs/shadow_pct_$(printf '%02d' $pct).yaml"
-    DATA_DIR="data/pct_$(printf '%02d' $pct)"
+    DATA_DIR="$SIM_DATA_ROOT/attacker_ratio/pct_$(printf '%02d' $pct)"
+    mkdir -p "$(dirname "$DATA_DIR")"
 
     # Generate config
-    python3 "$TRANSPEER_DIR/sim/gen_scale_test.py" \
+    "$TRANSPEER_PYTHON" "$TRANSPEER_DIR/sim/gen_scale_test.py" \
         --total "$TOTAL" --attacker-pct "$pct" \
         --stop-time "$STOP_TIME" --seed "$SEED" \
         --output "$CONFIG"
@@ -47,10 +51,8 @@ for pct in "${PERCENTAGES[@]}"; do
     START=$(date +%s)
 
     # Run Shadow with data dir pointed at our test folder
-    # Shadow writes to shadow.data by default; we move after
-    rm -rf "$TEST_DIR/shadow.data"
     cd "$TEST_DIR"
-    "$SHADOW_BIN" "$CONFIG" > "$DATA_DIR.log" 2>&1 &
+    "$SHADOW_BIN" -d "$DATA_DIR" "$CONFIG" > "$DATA_DIR.log" 2>&1 &
     SHADOW_PID=$!
 
     # Monitor peak memory during run
@@ -69,10 +71,6 @@ for pct in "${PERCENTAGES[@]}"; do
     ELAPSED=$((END - START))
     PEAK_MEM_MB=$((PEAK_MEM / 1024))
 
-    # Move shadow.data into the trial data dir
-    if [ -d "$TEST_DIR/shadow.data" ]; then
-        mv "$TEST_DIR/shadow.data" "$DATA_DIR"
-    fi
 
     # Parse results from honest1
     HONEST1_LOG="$DATA_DIR/hosts/honest1/python3.12.1000.stderr"

@@ -12,7 +12,16 @@ Scenario:
 import argparse
 import yaml
 
-TRANSPEER_PATH = "/home/lever65/transpeer"
+import os
+from pathlib import Path
+
+# Repo root derived from this file's location; override with TRANSPEER_DIR.
+# This file lives at <repo>/sim/tests/<name>/gen_config.py -> up 3 levels.
+TRANSPEER_PATH = os.environ.get(
+    "TRANSPEER_DIR", str(Path(__file__).resolve().parents[3]))
+PYTHON_BIN = os.environ.get("TRANSPEER_PYTHON", "python3")
+SIM_PARALLELISM = int(os.environ.get("SIM_PARALLELISM", "60"))
+
 NETWORK = "p2pa"
 P2P_PORT = 10000
 RPC_PORT = 10001
@@ -46,7 +55,7 @@ def gen(num_honest, num_flooders, flood_rate, stop_time, solve_pow, scenario_nam
         "general": {
             "stop_time": f"{stop_time}s",
             "model_unblocked_syscall_latency": True,
-            "parallelism": 8,
+            "parallelism": SIM_PARALLELISM,
         },
         "network": {
             "graph": {"type": "gml", "inline": graph_inline},
@@ -69,7 +78,7 @@ def gen(num_honest, num_flooders, flood_rate, stop_time, solve_pow, scenario_nam
             "bandwidth_up": "100 Mbit",
             "ip_addr": ip,
             "processes": [{
-                "path": "python3",
+                "path": PYTHON_BIN,
                 "args": args,
                 "environment": {"PYTHONPATH": TRANSPEER_PATH, "PYTHONUNBUFFERED": "1"},
                 "start_time": "3s",
@@ -102,7 +111,7 @@ def gen(num_honest, num_flooders, flood_rate, stop_time, solve_pow, scenario_nam
             "bandwidth_up": "100 Mbit",
             "ip_addr": ip,
             "processes": [{
-                "path": "python3",
+                "path": PYTHON_BIN,
                 "args": (
                     f"{TRANSPEER_PATH}/sim/flooder.py "
                     f"--targets {VICTIM_IP} --target-port 7337 "

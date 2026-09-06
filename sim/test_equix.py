@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """Test EquiX solve/verify inside Shadow."""
 import sys
-sys.path.insert(0, "/home/lever65/transpeer")
+import os
+sys.path.insert(0, os.environ.get(
+    "TRANSPEER_DIR",
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from transpeer.pow import solve, verify
 import time

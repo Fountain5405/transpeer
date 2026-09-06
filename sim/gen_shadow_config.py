@@ -25,13 +25,23 @@ def network_ports(net_idx):
     return base, base + 1  # p2p_port, rpc_port
 
 NETWORKS = [f"p2p{chr(ord('a') + i)}" for i in range(NUM_NETWORKS)]
-TRANSPEER_PATH = "/home/lever65/transpeer"
+import os
+from pathlib import Path
+
+# Repo root derived from this file's location; override with TRANSPEER_DIR.
+TRANSPEER_PATH = os.environ.get(
+    "TRANSPEER_DIR", str(Path(__file__).resolve().parent.parent))
+# The system python3 on some hosts is too old for this codebase (needs 3.10+).
+# simenv.sh points this at the project venv.
+PYTHON_BIN = os.environ.get("TRANSPEER_PYTHON", "python3")
+# Shadow worker threads; the box has 64. Override with SIM_PARALLELISM.
+SIM_PARALLELISM = int(os.environ.get("SIM_PARALLELISM", "60"))
 
 config = {
     "general": {
         "stop_time": "600s",
         "model_unblocked_syscall_latency": True,
-        "parallelism": 4,
+        "parallelism": SIM_PARALLELISM,
     },
     "network": {
         "graph": {
@@ -84,7 +94,7 @@ for net_i, net_name in enumerate(NETWORKS):
             "processes": [
                 # Fake daemon
                 {
-                    "path": "python3",
+                    "path": PYTHON_BIN,
                     "args": (
                         f"{TRANSPEER_PATH}/sim/daemons/fake_daemon.py "
                         f"--network {net_name} --rpc-port {rpc_port} "
@@ -99,7 +109,7 @@ for net_i, net_name in enumerate(NETWORKS):
                 },
                 # Transpeer
                 {
-                    "path": "python3",
+                    "path": PYTHON_BIN,
                     "args": (
                         f"-m transpeer --bind 0.0.0.0 --port 7337 "
                         f"--scan-range {SCAN_RANGE} --difficulty 1 "

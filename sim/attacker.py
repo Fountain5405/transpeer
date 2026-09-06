@@ -20,7 +20,10 @@ import struct
 import sys
 import time
 
-sys.path.insert(0, "/home/lever65/transpeer")
+import os
+sys.path.insert(0, os.environ.get(
+    "TRANSPEER_DIR",
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from aiohttp import web
 from transpeer.config import PROTOCOL_VERSION

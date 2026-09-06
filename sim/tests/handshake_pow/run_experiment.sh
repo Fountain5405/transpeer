@@ -12,8 +12,11 @@ set -u
 
 HONEST=20
 STOP_TIME=900  # 15 min simulated
-TRANSPEER_DIR="/home/lever65/transpeer"
-SHADOW_BIN="/home/lever65/monerosim_dev/shadowformonero/build/src/main/shadow"
+# Machine-specific paths (shadow binary, interpreter, storage) live in
+# sim/simenv.sh. Override any of them from the environment.
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../../simenv.sh"
+simenv_check || exit 1
+simenv_check_space
 TEST_DIR="$TRANSPEER_DIR/sim/tests/handshake_pow"
 RESULTS="$TEST_DIR/results.txt"
 
@@ -44,13 +47,14 @@ for name in "${ORDER[@]}"; do
     echo "=========================================="
 
     CONFIG="configs/${name}.yaml"
-    DATA_DIR="data/${name}"
-    LOG="data/${name}.log"
+    DATA_DIR="$SIM_DATA_ROOT/handshake_pow/${name}"
+    LOG="$SIM_DATA_ROOT/handshake_pow/${name}.log"
+    mkdir -p "$(dirname "$DATA_DIR")"
 
-    rm -rf "$DATA_DIR" "$TEST_DIR/shadow.data"
+    rm -rf "$DATA_DIR"
 
     # Generate config
-    python3 "$TEST_DIR/gen_config.py" \
+    "$TRANSPEER_PYTHON" "$TEST_DIR/gen_config.py" \
         --honest "$HONEST" \
         --stop-time "$STOP_TIME" \
         --name "$name" \
@@ -58,14 +62,10 @@ for name in "${ORDER[@]}"; do
         ${SCENARIOS[$name]}
 
     START=$(date +%s)
-    "$SHADOW_BIN" "$CONFIG" > "$LOG" 2>&1
+    "$SHADOW_BIN" -d "$DATA_DIR" "$CONFIG" > "$LOG" 2>&1
     END=$(date +%s)
     ELAPSED=$((END - START))
 
-    # Move data dir
-    if [ -d "$TEST_DIR/shadow.data" ]; then
-        mv "$TEST_DIR/shadow.data" "$DATA_DIR"
-    fi
 
     # Parse victim's peak difficulty
     VICTIM_LOG="$DATA_DIR/hosts/victim/python3.12.1000.stderr"

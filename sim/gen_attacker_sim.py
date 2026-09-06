@@ -14,7 +14,17 @@ The test measures:
 
 import yaml
 
-TRANSPEER_PATH = "/home/lever65/transpeer"
+import os
+from pathlib import Path
+
+# Repo root derived from this file's location; override with TRANSPEER_DIR.
+TRANSPEER_PATH = os.environ.get(
+    "TRANSPEER_DIR", str(Path(__file__).resolve().parent.parent))
+# The system python3 on some hosts is too old for this codebase (needs 3.10+).
+# simenv.sh points this at the project venv.
+PYTHON_BIN = os.environ.get("TRANSPEER_PYTHON", "python3")
+# Shadow worker threads; the box has 64. Override with SIM_PARALLELISM.
+SIM_PARALLELISM = int(os.environ.get("SIM_PARALLELISM", "60"))
 SCAN_RANGE = "11.0.0.0/28"
 DIFFICULTY = 100
 ATTACKER_FAKE_PEERS = 100  # Attacker tries to inject 100 fake peers
@@ -23,7 +33,7 @@ config = {
     "general": {
         "stop_time": "1800s",  # 30 minutes
         "model_unblocked_syscall_latency": True,
-        "parallelism": 4,
+        "parallelism": SIM_PARALLELISM,
     },
     "network": {
         "graph": {
@@ -64,7 +74,7 @@ for i in range(1, 6):
         "processes": [
             # Fake p2pa daemon
             {
-                "path": "python3",
+                "path": PYTHON_BIN,
                 "args": (
                     f"{TRANSPEER_PATH}/sim/daemons/fake_daemon.py "
                     f"--network p2pa --rpc-port {rpc_port} "
@@ -76,7 +86,7 @@ for i in range(1, 6):
             },
             # Transpeer with simulated PoW (Shadow-compatible)
             {
-                "path": "python3",
+                "path": PYTHON_BIN,
                 "args": (
                     f"-m transpeer --bind 0.0.0.0 --port 7337 "
                     f"--scan-range {SCAN_RANGE} --difficulty {DIFFICULTY} "
@@ -97,7 +107,7 @@ config["hosts"]["attacker"] = {
     "ip_addr": "11.0.0.6",
     "processes": [
         {
-            "path": "python3",
+            "path": PYTHON_BIN,
             "args": (
                 f"{TRANSPEER_PATH}/sim/attacker.py "
                 f"--target-network p2pa --target-port {p2p_port} "
