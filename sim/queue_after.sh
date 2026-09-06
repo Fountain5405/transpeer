@@ -20,7 +20,10 @@ NEXT="$3"
 echo "$(date) queued: '$NEXT'"
 echo "$(date) waiting for '$PATTERN' to exit and '$READY' to appear"
 
-while pgrep -f "$PATTERN" >/dev/null 2>&1; do
+# pgrep -f would match this script's own command line, which carries the
+# pattern as an argument, so exclude our own PID.
+still_running() { pgrep -f -- "$PATTERN" | grep -qvx "$$"; }
+while still_running; do
     sleep 60
 done
 echo "$(date) '$PATTERN' has exited"
