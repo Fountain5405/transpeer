@@ -31,9 +31,9 @@ from transpeer.config import PROTOCOL_VERSION
 log = logging.getLogger(__name__)
 
 
-def random_fake_ip():
+def random_fake_ip(rng=random):
     """Generate a random plausible-looking IP."""
-    return f"{random.randint(1,223)}.{random.randint(0,255)}.{random.randint(0,255)}.{random.randint(1,254)}"
+    return f"{rng.randint(1,223)}.{rng.randint(0,255)}.{rng.randint(0,255)}.{rng.randint(1,254)}"
 
 
 def parse_args():
@@ -53,6 +53,9 @@ def parse_args():
     parser.add_argument("--serve-while-generating", action="store_true",
                         help="Start serving before fake-peer PoW finishes, so the "
                              "attacker is discoverable from t=0")
+    parser.add_argument("--fake-seed", type=int, default=None,
+                        help="Seed for the fake peer set. Attackers sharing a seed "
+                             "serve identical fakes (coordinated attack)")
     return parser.parse_args()
 
 
@@ -71,8 +74,13 @@ class Attacker:
                  self.args.num_fake_peers, self.args.target_network,
                  self.args.difficulty, not self.args.no_pow)
 
+        # A shared seed makes every attacker serve the same fake set, so each
+        # fake collects one voucher per attacker subnet. Kept separate from
+        # the global RNG so announce jitter still differs per host.
+        rng = (random.Random(self.args.fake_seed)
+               if self.args.fake_seed is not None else random)
         for i in range(self.args.num_fake_peers):
-            addr = random_fake_ip()
+            addr = random_fake_ip(rng)
             port = self.args.target_port
             entry = {
                 "addr": addr,

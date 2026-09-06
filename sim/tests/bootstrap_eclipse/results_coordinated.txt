@@ -1,0 +1,19 @@
+# Transpeer bootstrap_eclipse experiment
+# Honest: 50, fresh node starts at 300s, simulated time: 1200s, seed: 42
+# Attacker mode: coordinated
+# Machine: 64 threads, 251 GB RAM, parallelism: 60
+# Started: Sun 06 Sep 2026 07:13:40 PM UTC
+
+scenario,attackers,attacker_subnets,policy,real_time_sec,run_mem_mb,store_total,store_attacker_pct,honest_known,buckets,queries_total,query_attacker_pct,peers_total,peer_attacker_pct,multi_voucher_pct,daemon_attacker_pct,snapshots,status
+A50_Sconcentrated_current_coord,50,1,current,75,2523,75,33.3,50,51,40,20.0,171,58.5,0.0,65.0,13,ok
+A50_Sconcentrated_bucketed_coord,50,1,bucketed,75,2499,53,5.7,50,51,36,11.1,167,59.9,0.0,65.0,13,ok
+A50_Sconcentrated_bucketed_vouchers_coord,50,1,bucketed_vouchers,75,2499,53,5.7,50,51,36,11.1,117,42.7,32.5,65.0,13,ok
+A150_Sconcentrated_current_coord,150,1,current,75,4819,103,51.5,50,51,40,45.0,160,62.5,0.0,65.0,13,ok
+A150_Sconcentrated_bucketed_coord,150,1,bucketed,75,4806,53,5.7,50,51,34,11.8,166,60.2,0.0,65.0,13,ok
+A150_Sconcentrated_bucketed_vouchers_coord,150,1,bucketed_vouchers,75,4788,53,5.7,50,51,34,8.8,120,41.7,37.5,65.0,13,ok
+A500_Sconcentrated_current_coord,500,2,current,75,12771,248,82.7,43,45,40,80.0,144,69.4,0.0,70.0,13,ok
+A500_Sconcentrated_bucketed_coord,500,2,bucketed,75,12774,56,10.7,50,52,40,17.5,172,58.1,0.0,65.0,13,ok
+A500_Sconcentrated_bucketed_vouchers_coord,500,2,bucketed_vouchers,75,12767,56,10.7,50,52,40,17.5,172,58.1,86.0,75.0,13,ok
+A1500_Sconcentrated_current_coord,1500,6,current,90,35099,500,95.6,22,28,40,90.0,126,79.4,0.0,70.0,13,ok
+A1500_Sconcentrated_bucketed_coord,1500,6,bucketed,90,35082,68,26.5,50,56,40,27.5,172,58.1,0.0,65.0,13,ok
+A1500_Sconcentrated_bucketed_vouchers_coord,1500,6,bucketed_vouchers,90,35082,68,26.5,50,56,40,27.5,172,58.1,84.3,100.0,13,ok

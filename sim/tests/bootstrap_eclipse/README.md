@@ -210,13 +210,62 @@ that typically report a real peer. In production that number is large for
 any well-known peer, so once again the price is distinct subnets, but this
 is the next attacker behavior to simulate, not a result yet.
 
+## Coordinated attacker rerun (`results_coordinated.txt`)
+
+`ATTACKER_MODE=coordinated`: every attacker targets the fresh node's
+network and serves the same 100 fakes (shared `--fake-seed`), so each fake
+collects one voucher per attacker subnet. Concentrated column, three
+policies.
+
+| attackers (subnets) | fake vouchers | top-20 to daemon: current → bucketed → vouchers |
+|--------------------:|:-------------:|:-----------------------------------------------:|
+| 50 (1)   | 1 | 65 → 65 → 65 |
+| 150 (1)  | 1 | 65 → 65 → 65 |
+| 500 (2)  | 2 | 70 → 65 → **75** |
+| 1500 (6) | 6 | 70 → 65 → **100** |
+
+**Coordination beats voucher ranking once attacker subnets exceed honest
+voucher depth.** The fresh node's network has about eight honest
+transpeers serving four static peers each, so the deepest any honest peer
+gets is four vouchers (histogram at 1500 attackers: honest peers at 1 to
+4, all 100 fakes at 6). Two attacker subnets already displace some honest
+peers from the top 20; six displace all of them.
+
+**The 65 percent floor is honest supply, not ranking.** In every
+one-subnet cell, under every policy, the top 20 held exactly the 7 honest
+peers the fresh node had for its network plus 13 fakes. Voucher ranking
+did put the 7 first, but a top-20 view cannot show that when only 7
+honest candidates exist.
+
+**This corrects the previous section.** The 0 percent daemon view under
+independent attackers was mostly because independent attackers pick a
+random target network, so few of their fakes were on the fresh node's
+network at all. It was not primarily a ranking win. The coordinated run
+is the honest measurement of ranking, and the honest answer is: ranking
+holds while the attacker has fewer subnets than the honest voucher depth,
+and this sim's honest voucher depth is four.
+
+**What this means for production.** Honest voucher depth is the number of
+honest transpeers in distinct subnets that know a given real peer. In a
+deployed network that is tens to hundreds for any well-established peer,
+so the coordinated attacker's subnet bill scales with the honest network.
+But the sim cannot demonstrate that with four static peers per node, and
+the number that matters is not yet measured. Two further backstops exist
+in production and not in the sim: the verifier, which is off here and
+would mark unreachable fakes dead within minutes, and the daemon's own
+peer list as a cross-check. An attacker who defeats both is running real
+reachable nodes, which is a daemon-level eclipse and outside what a
+discovery layer can prevent.
+
 ## Follow-ups
 
-1. Coordinated attacker: all attacker transpeers serve one shared fake set,
-   then read `daemon_attacker_pct` against attacker subnet count.
-2. A protected "tried" table, so that even a subnet-rich attacker cannot
+1. Honest peer model: give honest transpeers realistic peer lists (tens of
+   peers, heavy overlap across nodes) so honest voucher depth is measured
+   rather than pinned at four. Then rerun coordinated and find the subnet
+   count where the attacker overtakes it.
+2. Daemon-view metric sized to honest supply, or reported as "rank of
+   first attacker", so it stops saturating at 65 percent.
+3. A protected "tried" table, so that even a subnet-rich attacker cannot
    displace transpeers that have answered over several cycles.
-3. Rerun the 25-subnet column at 40 simulated minutes to confirm query
+4. Rerun the 25-subnet column at 40 simulated minutes to confirm query
    share converges to the store formula.
-4. Honest peer counts closer to reality in the generator, so entry-share
-   metrics stop being dominated by the static-peers setup.

@@ -32,6 +32,10 @@ SEED="${SEED:-42}"
 ATTACKER_COUNTS="${ATTACKER_COUNTS:-50 150 500 1500}"
 SUBNET_LEVELS="${SUBNET_LEVELS:-concentrated 25 100 spread}"
 POLICIES="${POLICIES:-current bucketed}"
+# independent: each attacker serves random fakes for a random network.
+# coordinated: all attackers serve one shared fake set for the fresh
+# node's network, so each fake gets one voucher per attacker subnet.
+ATTACKER_MODE="${ATTACKER_MODE:-independent}"
 
 MIN_FREE_DISK_GB="${MIN_FREE_DISK_GB:-80}"
 MEM_PER_HOST_MB="${MEM_PER_HOST_MB:-40}"
@@ -44,6 +48,7 @@ if [ ! -f "$RESULTS" ]; then
     {
         echo "# Transpeer bootstrap_eclipse experiment"
         echo "# Honest: $HONEST, fresh node starts at ${FRESH_START}s, simulated time: ${STOP_TIME}s, seed: $SEED"
+        echo "# Attacker mode: $ATTACKER_MODE"
         echo "# Machine: $(nproc) threads, $(free -g | awk '/^Mem:/{print $2}') GB RAM, parallelism: $SIM_PARALLELISM"
         echo "# Started: $(date)"
         echo ""
@@ -58,6 +63,11 @@ used_mem_mb()   { awk '/^MemTotal:/{t=$2} /^MemAvailable:/{a=$2} END{print int((
 run_scenario() {
     local A="$1" S="$2" POLICY="$3"
     local NAME="A${A}_S${S}_${POLICY}"
+    local MODE_FLAGS=""
+    if [ "$ATTACKER_MODE" = "coordinated" ]; then
+        NAME="${NAME}_coord"
+        MODE_FLAGS="--coordinated"
+    fi
     local TOTAL=$((HONEST + 1 + A))
 
     echo ""
@@ -93,7 +103,7 @@ run_scenario() {
 
     local GEN_OUT
     GEN_OUT=$("$TRANSPEER_PYTHON" "$TEST_DIR/gen_config.py" \
-        --honest "$HONEST" --attackers "$A" --attacker-subnets "$S" $POLICY_FLAGS \
+        --honest "$HONEST" --attackers "$A" --attacker-subnets "$S" $POLICY_FLAGS $MODE_FLAGS \
         --stop-time "$STOP_TIME" --fresh-start "$FRESH_START" --seed "$SEED" \
         --output "$CONFIG") || { echo "config generation failed"; return 1; }
     echo "$GEN_OUT" | grep -v ECLIPSE_LAYOUT
