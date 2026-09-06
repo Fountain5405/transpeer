@@ -22,13 +22,13 @@ Results are appended to `results.txt` and log output to `run.log`.
 
 | ID | Category | Purpose | Status |
 |----|----------|---------|--------|
-| [scale_baseline](scale_baseline/) | Scale | Find upper bound of hosts on this machine | running (64-thread / 251 GB box) |
+| [scale_baseline](scale_baseline/) | Scale | Find upper bound of hosts on this machine | done (3000 ok, 5000 needs swap) |
 | [cross_network](#cross_network) | Discovery | Verify cross-network peer propagation | done |
 | [attacker_ratio](attacker_ratio/) | Attack | Impact of N% attackers injecting fake peers | done |
 | [handshake_pow](handshake_pow/) | Defense | Adaptive handshake PoW under distributed flood | done |
 | [sybil_subnet](#sybil_subnet) | Attack | /16 subnet domination via Sybil transpeers | pending |
 | [slow_burn_inject](#slow_burn_inject) | Attack | Slow-drip injection under per-source cap | pending |
-| [bootstrap_eclipse](bootstrap_eclipse/) | Attack | Attacker saturates network before honest nodes | queued, redesigned as a defense test |
+| [bootstrap_eclipse](bootstrap_eclipse/) | Attack | Attacker saturates network before honest nodes | done: bucketing flattens the curve against IP count |
 | [distributed_ddos_multi](#distributed_ddos_multi) | Attack | Distributed flood across many victim transpeers | pending |
 | [long_running](#long_running) | Stability | Store / cache / rotation behavior over hours | pending |
 | [honest_under_attack](#honest_under_attack) | UX | Bootstrapping honest node succeeds under attack | pending |

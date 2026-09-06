@@ -1,0 +1,36 @@
+# Transpeer bootstrap_eclipse experiment
+# Honest: 50, fresh node starts at 300s, simulated time: 1200s, seed: 42
+# Machine: 64 threads, 251 GB RAM, parallelism: 60
+# Started: Sun 06 Sep 2026 02:24:08 PM UTC
+
+scenario,attackers,attacker_subnets,policy,real_time_sec,run_mem_mb,store_total,store_attacker_pct,honest_known,buckets,queries_total,query_attacker_pct,peers_total,peer_attacker_pct,snapshots,status
+A50_Sconcentrated_current,50,1,current,75,2546,75,33.3,50,51,40,20.0,471,84.9,13,ok
+A50_Sconcentrated_bucketed,50,1,bucketed,75,2495,53,5.7,50,51,36,8.3,219,68.5,13,ok
+A50_S25_current,50,25,current,75,2492,100,50.0,50,75,39,38.5,816,91.9,13,ok
+A50_S25_bucketed,50,25,bucketed,75,2520,100,50.0,50,75,39,20.5,469,85.3,13,ok
+A50_Sspread_current,50,50,current,75,2503,100,50.0,50,100,38,42.1,865,92.5,13,ok
+A50_Sspread_bucketed,50,50,bucketed,75,2523,100,50.0,50,100,38,36.8,767,91.3,13,ok
+A150_Sconcentrated_current,150,1,current,75,4801,103,51.5,50,51,40,45.0,960,93.8,13,ok
+A150_Sconcentrated_bucketed,150,1,bucketed,75,4802,53,5.7,50,51,34,11.8,216,69.4,13,ok
+A150_S25_current,150,25,current,75,4807,150,66.7,50,75,40,62.5,1306,95.7,13,ok
+A150_S25_bucketed,150,25,bucketed,75,4814,125,60.0,50,75,40,55.0,1156,95.2,13,ok
+A150_S100_current,150,100,current,75,4804,197,74.6,50,149,40,62.5,1311,95.3,13,ok
+A150_S100_bucketed,150,100,bucketed,75,4831,198,74.7,50,150,40,67.5,1305,95.8,13,ok
+A150_Sspread_current,150,150,current,75,4811,198,74.7,50,198,40,65.0,1358,95.7,13,ok
+A150_Sspread_bucketed,150,150,bucketed,75,4843,200,75.0,50,200,40,62.5,1310,95.4,13,ok
+A500_Sconcentrated_current,500,2,current,75,12777,249,83.1,42,44,40,80.0,1644,97.3,13,ok
+A500_Sconcentrated_bucketed,500,2,bucketed,75,12770,56,10.7,50,52,40,17.5,372,80.6,13,ok
+A500_S25_current,500,25,current,75,12783,267,83.9,43,68,40,75.0,1549,96.8,13,ok
+A500_S25_bucketed,500,25,bucketed,75,12773,125,60.0,50,75,40,52.5,1109,94.7,13,ok
+A500_S100_current,500,100,current,60,12744,383,87.5,48,148,40,77.5,1598,97.0,13,ok
+A500_S100_bucketed,500,100,bucketed,75,12795,318,84.9,48,148,40,85.0,1736,97.9,13,ok
+A500_Sspread_current,500,200,current,75,12742,417,88.0,50,244,40,75.0,1549,96.8,13,ok
+A500_Sspread_bucketed,500,200,bucketed,75,12807,352,86.9,46,227,40,85.0,1581,98.0,13,ok
+A1500_Sconcentrated_current,1500,6,current,90,35078,500,95.6,22,28,40,90.0,1826,98.6,13,ok
+A1500_Sconcentrated_bucketed,1500,6,bucketed,90,35051,68,26.5,50,56,40,20.0,469,85.3,13,ok
+A1500_S25_current,1500,25,current,90,35076,500,95.4,23,48,40,90.0,1826,98.6,13,ok
+A1500_S25_bucketed,1500,25,bucketed,90,35062,125,60.0,50,75,40,47.5,1010,94.1,13,ok
+A1500_S100_current,1500,100,current,90,35066,500,95.2,24,123,40,87.5,1778,98.4,13,ok
+A1500_S100_bucketed,1500,100,bucketed,105,35101,347,86.5,47,147,40,92.5,1872,98.8,13,ok
+A1500_Sspread_current,1500,200,current,90,35082,500,95.0,25,210,40,85.0,1732,98.2,13,ok
+A1500_Sspread_bucketed,1500,200,bucketed,120,35101,500,90.8,46,245,40,80.0,1632,98.0,13,ok
