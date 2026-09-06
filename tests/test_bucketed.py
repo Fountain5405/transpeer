@@ -181,12 +181,71 @@ async def test_snapshot():
     check(snap["peer_sources"] == {"11.0.1.1": 2, "local": 1}, "snapshot attributes peers to their source transpeer")
 
 
+async def test_vouchers():
+    print("\n=== Voucher counting ===")
+    from transpeer.peerstore import Peer, BASE_PEERS_PER_SOURCE
+
+    def vstore():
+        return PeerStore(Config(in_memory=True, bucketed=True, vouchers=True, subnet_prefix=24))
+
+    def peer(addr, claimed=1):
+        return Peer(network="x", addr=addr, port=1, last_seen=1, sources=claimed)
+
+    # Claimed counts are ignored; vouchers are distinct observed buckets.
+    s = vstore()
+    await s.add_peer(peer("1.1.1.1", claimed=999), source_addr="11.0.5.1")
+    await s.add_peer(peer("1.1.1.1", claimed=999), source_addr="11.0.5.2")
+    await s.add_peer(peer("1.1.1.1", claimed=999), source_addr="11.0.5.3")
+    p = s.get_peers("x", verified_only=False)[0]
+    check(p.sources == 1 and p.vouchers == {"11.0.5.0/24"},
+          "three reporters in one bucket are one voucher, claimed 999 ignored")
+    await s.add_peer(peer("1.1.1.1"), source_addr="11.0.6.1")
+    p = s.get_peers("x", verified_only=False)[0]
+    check(p.sources == 2 and len(p.vouchers) == 2, "a reporter in a second bucket is a second voucher")
+
+    # Default policy keeps the claimed-max behaviour.
+    s0 = store(bucketed=False)
+    await s0.add_peer(peer("1.1.1.1", claimed=1), source_addr="11.0.5.1")
+    await s0.add_peer(peer("1.1.1.1", claimed=999), source_addr="11.0.5.2")
+    check(s0.get_peers("x", verified_only=False)[0].sources == 999,
+          "default policy still takes the remote's claimed source count")
+
+    # Per-source cap is shared by every transpeer in a bucket.
+    s = vstore()
+    for i in range(BASE_PEERS_PER_SOURCE):
+        await s.add_peer(peer(f"2.0.0.{i+1}"), source_addr="11.0.5.1")
+    refused = not await s.add_peer(peer("2.0.1.1"), source_addr="11.0.5.2")
+    accepted = await s.add_peer(peer("2.0.1.1"), source_addr="11.0.6.1")
+    check(refused and accepted, "a second transpeer in a capped bucket is refused; another bucket is not")
+
+    s = store(bucketed=True)
+    for i in range(BASE_PEERS_PER_SOURCE):
+        await s.add_peer(peer(f"2.0.0.{i+1}"), source_addr="11.0.5.1")
+    check(await s.add_peer(peer("2.0.1.1"), source_addr="11.0.5.2"),
+          "without --vouchers the cap is per address, so the same-bucket reporter gets a fresh 50")
+
+    # Ranking: most independently corroborated first.
+    s = vstore()
+    await s.add_peer(peer("3.0.0.1"), source_addr="11.0.5.1")      # 1 voucher
+    await s.add_peer(peer("3.0.0.2"), source_addr="11.0.5.1")
+    await s.add_peer(peer("3.0.0.2"), source_addr="11.0.6.1")      # 2 vouchers
+    await s.add_peer(peer("3.0.0.2"), source_addr="11.0.7.1")      # 3 vouchers
+    await s.add_peer(peer("3.0.0.3"), source_addr="11.0.8.1")
+    await s.add_peer(peer("3.0.0.3"), source_addr="11.0.9.1")      # 2 vouchers
+    order = [p.addr for p in s.get_peers("x", verified_only=False)]
+    check(order == ["3.0.0.2", "3.0.0.3", "3.0.0.1"], "get_peers ranks by voucher count")
+    snap = s.snapshot(networks=["x"])
+    check(snap["voucher_hist"] == {1: 1, 2: 1, 3: 1} and snap["daemon_view"]["x"][0] == "11.0.5.1",
+          "snapshot reports the voucher histogram and the daemon's view in rank order")
+
+
 async def main():
     await test_admission()
     await test_eviction()
     await test_query_selection()
     await test_gossip_selection()
     await test_snapshot()
+    await test_vouchers()
     print(f"\nResults: {passed} passed, {failed} failed")
     sys.exit(1 if failed else 0)
 

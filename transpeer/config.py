@@ -57,6 +57,10 @@ class Config:
     # Bucketed policy: per-bucket admission cap on every discovery path,
     # eviction from the most crowded bucket, bucket-uniform query and gossip.
     bucketed: bool = False
+    # Voucher counting: per-source peer cap and trust keyed by bucket, a
+    # peer's credibility is the number of distinct buckets that reported it
+    # (observed, not claimed), and get_peers ranks by it.
+    vouchers: bool = False
     # Log a STORE_SNAPSHOT line every N seconds (0 = off). Simulation metric.
     snapshot_interval: int = 0
 
@@ -116,6 +120,11 @@ def parse_args() -> Config:
              "evict from the fullest bucket, query and gossip bucket-uniform.",
     )
     parser.add_argument(
+        "--vouchers", action="store_true",
+        help="Voucher counting: key per-source peer caps by bucket and rank "
+             "peers by the number of distinct buckets that reported them.",
+    )
+    parser.add_argument(
         "--snapshot-interval", type=int, default=0,
         help="Log store composition every N seconds (simulation metric).",
     )
@@ -135,6 +144,7 @@ def parse_args() -> Config:
         no_verify=args.no_verify,
         subnet_prefix=args.subnet_prefix,
         bucketed=args.bucketed,
+        vouchers=args.vouchers,
         snapshot_interval=args.snapshot_interval,
     )
 

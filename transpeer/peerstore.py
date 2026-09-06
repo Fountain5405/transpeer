@@ -24,6 +24,9 @@ class Peer:
     sources: int = 1
     verified: bool = False
     source_addr: str = ""  # transpeer that gave us this peer
+    # Buckets of the transpeers that reported this peer, as observed by us.
+    # Only maintained under --vouchers; never sent on the wire.
+    vouchers: set = field(default_factory=set)
     # PoW proof
     nonce: bytes = b""
     effort: int = 0
@@ -202,10 +205,18 @@ class PeerStore:
 
     # -- Peers --
 
+    def _trust_key(self, source_addr: str) -> str:
+        """Per-source trust is keyed by bucket under --vouchers, so every
+        transpeer in one subnet shares a single acceptance cap."""
+        if self.config.vouchers:
+            return self._bucket_of(source_addr)
+        return source_addr
+
     def get_source_trust(self, source_addr: str) -> SourceTrust:
-        if source_addr not in self._source_trust:
-            self._source_trust[source_addr] = SourceTrust()
-        return self._source_trust[source_addr]
+        key = self._trust_key(source_addr)
+        if key not in self._source_trust:
+            self._source_trust[key] = SourceTrust()
+        return self._source_trust[key]
 
     async def add_peer(self, peer: Peer, source_addr: str = "") -> bool:
         """Add or update a peer. Returns True if new."""
@@ -231,7 +242,12 @@ class PeerStore:
 
             existing = self._peers.get(peer.key)
             if existing:
-                existing.sources = max(existing.sources, peer.sources)
+                if self.config.vouchers:
+                    if source_addr:
+                        existing.vouchers.add(self._bucket_of(source_addr))
+                    existing.sources = max(1, len(existing.vouchers))
+                else:
+                    existing.sources = max(existing.sources, peer.sources)
                 if peer.last_seen > existing.last_seen:
                     existing.last_seen = peer.last_seen
                     existing.nonce = peer.nonce
@@ -243,6 +259,12 @@ class PeerStore:
             else:
                 if source_addr:
                     peer.source_addr = source_addr
+                if self.config.vouchers:
+                    # Trust what we saw, not the remote's claimed count.
+                    peer.vouchers = (
+                        {self._bucket_of(source_addr)} if source_addr else {"local"}
+                    )
+                    peer.sources = 1
                 self._peers[peer.key] = peer
                 await self._save_peer(peer)
                 if source_addr:
@@ -290,10 +312,16 @@ class PeerStore:
                         await self._db.commit()
 
     def get_peers(self, network: str, verified_only: bool = True) -> list[Peer]:
-        return [
+        peers = [
             p for p in self._peers.values()
             if p.network == network and (not verified_only or p.verified)
         ]
+        if self.config.vouchers:
+            # Most independently corroborated first: the peer the most
+            # distinct subnets agree on is the one the daemon should try first.
+            peers.sort(key=lambda p: (len(p.vouchers), p.verified, p.last_seen),
+                       reverse=True)
+        return peers
 
     def get_all_networks(self) -> list[str]:
         return list({p.network for p in self._peers.values()})
@@ -542,18 +570,33 @@ class PeerStore:
                 picked.append(t)
         return picked
 
-    def snapshot(self) -> dict:
-        """Compact store composition for STORE_SNAPSHOT logging."""
+    def snapshot(self, networks: list[str] | None = None, top: int = 20) -> dict:
+        """Compact store composition for STORE_SNAPSHOT logging.
+
+        daemon_view lists, per network, the source of each of the first `top`
+        peers get_peers would hand out. Unverified peers are included because
+        simulations run with --no-verify.
+        """
         by_source: dict[str, int] = {}
+        hist: dict[int, int] = {}
         for p in self._peers.values():
             src = p.source_addr or "local"
             by_source[src] = by_source.get(src, 0) + 1
+            n = len(p.vouchers) if self.config.vouchers else p.sources
+            hist[n] = hist.get(n, 0) + 1
+        daemon_view = {
+            net: [p.source_addr or "local"
+                  for p in self.get_peers(net, verified_only=False)[:top]]
+            for net in (networks or [])
+        }
         return {
             "transpeers": len(self._transpeers),
             "buckets": self.transpeer_bucket_count(),
             "transpeer_addrs": sorted(t.addr for t in self._transpeers.values()),
             "peers": len(self._peers),
             "peer_sources": by_source,
+            "voucher_hist": hist,
+            "daemon_view": daemon_view,
         }
 
     async def _save_transpeer(self, entry: TranspeerEntry):

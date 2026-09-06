@@ -194,13 +194,16 @@ class Node:
         while True:
             await asyncio.sleep(interval)
             try:
-                s = self.store.snapshot()
+                s = self.store.snapshot(networks=list(self._networks))
                 log.info(
                     "STORE_SNAPSHOT transpeers=%d buckets=%d peers=%d "
-                    "transpeer_addrs=%s peer_sources=%s",
+                    "transpeer_addrs=%s peer_sources=%s voucher_hist=%s daemon_view=%s",
                     s["transpeers"], s["buckets"], s["peers"],
                     ",".join(s["transpeer_addrs"]),
                     ";".join(f"{a}:{n}" for a, n in sorted(s["peer_sources"].items())),
+                    ";".join(f"{k}:{v}" for k, v in sorted(s["voucher_hist"].items())),
+                    "|".join(f"{net}:{','.join(srcs)}"
+                             for net, srcs in s["daemon_view"].items()),
                 )
             except Exception as e:
                 log.error("Snapshot error: %s", e)

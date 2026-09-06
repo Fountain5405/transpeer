@@ -18,7 +18,8 @@ simenv_check || exit 1
 simenv_check_space
 
 TEST_DIR="$TRANSPEER_DIR/sim/tests/bootstrap_eclipse"
-RESULTS="$TEST_DIR/results.txt"
+# Override RESULTS_FILE to keep a rerun's rows apart from the main grid.
+RESULTS="${RESULTS_FILE:-$TEST_DIR/results.txt}"
 DATA_ROOT="$SIM_DATA_ROOT/bootstrap_eclipse"
 
 HONEST="${HONEST:-50}"
@@ -46,7 +47,7 @@ if [ ! -f "$RESULTS" ]; then
         echo "# Machine: $(nproc) threads, $(free -g | awk '/^Mem:/{print $2}') GB RAM, parallelism: $SIM_PARALLELISM"
         echo "# Started: $(date)"
         echo ""
-        echo "scenario,attackers,attacker_subnets,policy,real_time_sec,run_mem_mb,store_total,store_attacker_pct,honest_known,buckets,queries_total,query_attacker_pct,peers_total,peer_attacker_pct,snapshots,status"
+        echo "scenario,attackers,attacker_subnets,policy,real_time_sec,run_mem_mb,store_total,store_attacker_pct,honest_known,buckets,queries_total,query_attacker_pct,peers_total,peer_attacker_pct,multi_voucher_pct,daemon_attacker_pct,snapshots,status"
     } > "$RESULTS"
 fi
 
@@ -67,14 +68,14 @@ run_scenario() {
     local FREE_GB; FREE_GB=$(free_disk_gb)
     if [ "${FREE_GB:-0}" -lt "$MIN_FREE_DISK_GB" ]; then
         echo "ABORT: only ${FREE_GB}GB free on $DATA_ROOT"
-        echo "$NAME,$A,$S,$POLICY,0,0,0,0.0,0,0,0,0.0,0,0.0,0,aborted_disk" >> "$RESULTS"
+        echo "$NAME,$A,$S,$POLICY,0,0,0,0.0,0,0,0,0.0,0,0.0,0.0,0.0,0,aborted_disk" >> "$RESULTS"
         return 1
     fi
     local PROJECTED=$((TOTAL * MEM_PER_HOST_MB))
     local BUDGET=$(( $(avail_mem_mb) * MEM_HEADROOM_PCT / 100 ))
     if [ "$PROJECTED" -gt "$BUDGET" ]; then
         echo "ABORT: projected ${PROJECTED}MB exceeds ${BUDGET}MB budget"
-        echo "$NAME,$A,$S,$POLICY,0,0,0,0.0,0,0,0,0.0,0,0.0,0,aborted_memory" >> "$RESULTS"
+        echo "$NAME,$A,$S,$POLICY,0,0,0,0.0,0,0,0,0.0,0,0.0,0.0,0.0,0,aborted_memory" >> "$RESULTS"
         return 1
     fi
 
@@ -82,12 +83,17 @@ run_scenario() {
     local DATA_DIR="$DATA_ROOT/$NAME"
     rm -rf "$DATA_DIR"
 
-    local BUCKETED_FLAG=""
-    [ "$POLICY" = "bucketed" ] && BUCKETED_FLAG="--bucketed"
+    local POLICY_FLAGS=""
+    case "$POLICY" in
+        current) ;;
+        bucketed) POLICY_FLAGS="--bucketed" ;;
+        bucketed_vouchers) POLICY_FLAGS="--bucketed --vouchers" ;;
+        *) echo "unknown policy: $POLICY"; return 1 ;;
+    esac
 
     local GEN_OUT
     GEN_OUT=$("$TRANSPEER_PYTHON" "$TEST_DIR/gen_config.py" \
-        --honest "$HONEST" --attackers "$A" --attacker-subnets "$S" $BUCKETED_FLAG \
+        --honest "$HONEST" --attackers "$A" --attacker-subnets "$S" $POLICY_FLAGS \
         --stop-time "$STOP_TIME" --fresh-start "$FRESH_START" --seed "$SEED" \
         --output "$CONFIG") || { echo "config generation failed"; return 1; }
     echo "$GEN_OUT" | grep -v ECLIPSE_LAYOUT

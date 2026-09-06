@@ -168,13 +168,55 @@ extreme in production, but a per-source cap keyed on volume still lets a
 single source outweigh many. Counting a peer's vouchers by distinct bucket
 (deferred from this round) is the fix to test next.
 
+## Voucher counting rerun (`results_vouchers.txt`)
+
+Concentrated column only, three policies. `--vouchers` keys the per-source
+peer cap by bucket instead of by address, counts a peer's sources as the
+distinct buckets that reported it as observed here rather than as claimed
+on the wire, and hands peers out most-corroborated first. Two new columns:
+`multi_voucher_pct`, the share of peer entries reported by two or more
+buckets, and `daemon_attacker_pct`, the attacker share of the top 20 peers
+for the fresh node's network in the order the daemon would receive them.
+
+Attacker share of peer entries in the store, current → bucketed → bucketed
+with vouchers:
+
+| attackers (subnets) | store entries | multi-voucher | top-20 to daemon |
+|--------------------:|:-------------:|:-------------:|:----------------:|
+| 50 (1)   | 85 → 69 → **43** | 33 % | 0 → 0 → **0** |
+| 150 (1)  | 94 → 69 → **42** | 38 % | 65 → 0 → **0** |
+| 500 (2)  | 97 → 81 → **58** | 28 % | 70 → 0 → **0** |
+| 1500 (6) | 99 → 88 → **81** | 12 % | 70 → 65 → **0** |
+
+**Store entries follow the cap exactly.** Under vouchers the attacker holds
+50 entries per subnet: 50 of 117 at one subnet, 100 of 172 at two, 300 of
+369 at six. So the entry share is `50·S / (50·S + honest)`, and with only
+about 70 honest entries in this sim, one attacker subnet's 50-peer budget
+still outweighs every honest source combined. The cap is doing its job; the
+honest volume is the artifact.
+
+**What reaches the daemon is clean.** With ranking by voucher count, the top
+20 peers were 0 percent attacker in every cell, including the six-subnet
+one where 81 percent of the store is attacker. Honest peers are reported by
+several honest subnets and rise; each attacker fake is a random address
+reported by exactly one bucket, however many transpeers that bucket runs.
+Under the current policy the daemon would have received 65 to 70 percent
+attacker fakes at 150 attackers and up.
+
+**The attacker's counter-move is coordination.** If every attacker transpeer
+across S subnets served the same fake set, each fake would carry S vouchers.
+Ranking then favors the attacker once S exceeds the number of honest subnets
+that typically report a real peer. In production that number is large for
+any well-known peer, so once again the price is distinct subnets, but this
+is the next attacker behavior to simulate, not a result yet.
+
 ## Follow-ups
 
-1. Voucher counting by bucket, then rerun the concentrated column and read
-   `peer_attacker_pct`.
+1. Coordinated attacker: all attacker transpeers serve one shared fake set,
+   then read `daemon_attacker_pct` against attacker subnet count.
 2. A protected "tried" table, so that even a subnet-rich attacker cannot
    displace transpeers that have answered over several cycles.
 3. Rerun the 25-subnet column at 40 simulated minutes to confirm query
    share converges to the store formula.
-4. Honest peer counts closer to reality in the generator, so peer-store
+4. Honest peer counts closer to reality in the generator, so entry-share
    metrics stop being dominated by the static-peers setup.

@@ -81,7 +81,8 @@ GRAPH = """graph [
 
 
 def gen(num_honest, num_attackers, attacker_subnets, bucketed, stop_time,
-        fresh_start, snapshot_interval, fake_peers, difficulty, seed):
+        fresh_start, snapshot_interval, fake_peers, difficulty, seed,
+        vouchers=False):
     random.seed(seed)
     S = resolve_subnets(num_attackers, attacker_subnets)
     if num_honest + 1 + S > 256:
@@ -102,6 +103,8 @@ def gen(num_honest, num_attackers, attacker_subnets, bucketed, stop_time,
     policy_flags = f" --subnet-prefix {SUBNET_PREFIX}"
     if bucketed:
         policy_flags += " --bucketed"
+    if vouchers:
+        policy_flags += " --vouchers"
 
     def transpeer_process(args, start):
         return {
@@ -202,6 +205,8 @@ def main():
                          "or 'spread' (one attacker per /24, up to 200)")
     ap.add_argument("--bucketed", action="store_true",
                     help="run all transpeer nodes with --bucketed")
+    ap.add_argument("--vouchers", action="store_true",
+                    help="run all transpeer nodes with --vouchers")
     ap.add_argument("--stop-time", type=int, default=900)
     ap.add_argument("--fresh-start", type=int, default=300)
     ap.add_argument("--snapshot-interval", type=int, default=60)
@@ -213,7 +218,8 @@ def main():
 
     config, S, first_attacker_bucket = gen(
         a.honest, a.attackers, a.attacker_subnets, a.bucketed, a.stop_time,
-        a.fresh_start, a.snapshot_interval, a.fake_peers, a.difficulty, a.seed)
+        a.fresh_start, a.snapshot_interval, a.fake_peers, a.difficulty, a.seed,
+        vouchers=a.vouchers)
 
     with open(a.output, "w") as f:
         yaml.dump(config, f, default_flow_style=False, sort_keys=False)
@@ -222,7 +228,10 @@ def main():
     print(f"Generated {a.output}: {total} hosts")
     print(f"  {a.honest} honest in buckets 0..{a.honest-1}, fresh in bucket {a.honest}")
     print(f"  {a.attackers} attackers across {S} buckets starting at {first_attacker_bucket}")
-    print(f"  policy={'bucketed' if a.bucketed else 'current'}")
+    policy = 'bucketed' if a.bucketed else 'current'
+    if a.vouchers:
+        policy += '+vouchers'
+    print(f"  policy={policy}")
     # Machine-readable line for the runner.
     print(f"ECLIPSE_LAYOUT honest={a.honest} attackers={a.attackers} "
           f"attacker_subnets={S} first_attacker_bucket={first_attacker_bucket} "
