@@ -46,6 +46,13 @@ def parse_args():
     parser.add_argument("--difficulty", type=int, default=100, help="PoW difficulty")
     parser.add_argument("--no-pow", action="store_true", help="Skip PoW on entries")
     parser.add_argument("--sim-pow", action="store_true", help="Use simulated PoW (sleep-based)")
+    parser.add_argument("--announce-targets", default="",
+                        help="Comma-separated transpeer IPs to self-announce to")
+    parser.add_argument("--announce-interval", type=int, default=0,
+                        help="Seconds between self-announce rounds (0 = off)")
+    parser.add_argument("--serve-while-generating", action="store_true",
+                        help="Start serving before fake-peer PoW finishes, so the "
+                             "attacker is discoverable from t=0")
     return parser.parse_args()
 
 
@@ -104,6 +111,46 @@ class Attacker:
                  self.peers_generated, self.pow_time_total,
                  self.pow_time_total / max(1, self.peers_generated))
 
+    async def announce_loop(self):
+        """Self-announce: hit /transpeer on every target.
+
+        The target records the requester as a candidate, probes it back and
+        admits it to its store. One request per target is the cheapest way
+        into an honest node's transpeer list, and under the default policy
+        it bypasses the gossip subnet limit. Repeating keeps last_seen
+        fresh so recency-based eviction drops honest entries first.
+        """
+        targets = [t for t in self.args.announce_targets.split(",") if t]
+        if not targets or self.args.announce_interval <= 0:
+            return
+        import aiohttp
+        # Spread the first round so a thousand attackers do not fire at once.
+        await asyncio.sleep(random.uniform(0, min(60, self.args.announce_interval)))
+        sem = asyncio.Semaphore(10)
+        rounds = ok = fail = 0
+
+        async def hit(session, target):
+            nonlocal ok, fail
+            async with sem:
+                try:
+                    url = f"http://{target}:{self.args.port}/transpeer"
+                    async with session.get(url) as r:
+                        if r.status == 200:
+                            ok += 1
+                        else:
+                            fail += 1
+                except Exception:
+                    fail += 1
+
+        while True:
+            rounds += 1
+            timeout = aiohttp.ClientTimeout(total=5)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                await asyncio.gather(*(hit(session, t) for t in targets))
+            log.info("ANNOUNCE round=%d ok=%d fail=%d targets=%d",
+                     rounds, ok, fail, len(targets))
+            await asyncio.sleep(self.args.announce_interval)
+
     async def handle_transpeer(self, request):
         return web.json_response({
             "protocol": PROTOCOL_VERSION,
@@ -134,10 +181,14 @@ async def main():
 
     attacker = Attacker(args)
 
-    # Generate fake peers (this is where PoW cost hits)
-    await attacker.generate_fake_peers()
+    # Default: generate first, then serve. The PoW delay before an attacker
+    # becomes reachable is part of what attacker_ratio measured, so it stays
+    # the default. --serve-while-generating makes the attacker discoverable
+    # from t=0 and fills in fake peers as their PoW completes.
+    if not args.serve_while_generating:
+        await attacker.generate_fake_peers()
 
-    # Serve them via transpeer protocol
+    # Serve via transpeer protocol
     app = web.Application()
     app.router.add_get("/transpeer", attacker.handle_transpeer)
     app.router.add_get("/peers/{network}", attacker.handle_peers)
@@ -150,7 +201,10 @@ async def main():
     log.info("Attacker serving %d fake %s peers on port %d",
              len(attacker.fake_peers), args.target_network, args.port)
 
-    await asyncio.Event().wait()
+    background = [attacker.announce_loop(), asyncio.Event().wait()]
+    if args.serve_while_generating:
+        background.append(attacker.generate_fake_peers())
+    await asyncio.gather(*background)
 
 
 if __name__ == "__main__":

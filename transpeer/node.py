@@ -70,6 +70,7 @@ class Node:
                 self._verify_loop(),
                 self._prune_loop(),
                 self._candidate_loop(),
+                self._snapshot_loop(),
             )
         finally:
             await self.store.close()
@@ -179,6 +180,30 @@ class Node:
                 log.info("Pruned stale entries")
             except Exception as e:
                 log.error("Prune error: %s", e)
+
+    async def _snapshot_loop(self):
+        """Log the store's composition periodically (simulation metric).
+
+        One line, parseable: transpeer addresses and peer counts keyed by
+        the transpeer that supplied them, so an experiment can attribute
+        the store to honest or attacker sources by IP.
+        """
+        interval = self.config.snapshot_interval
+        if interval <= 0:
+            return
+        while True:
+            await asyncio.sleep(interval)
+            try:
+                s = self.store.snapshot()
+                log.info(
+                    "STORE_SNAPSHOT transpeers=%d buckets=%d peers=%d "
+                    "transpeer_addrs=%s peer_sources=%s",
+                    s["transpeers"], s["buckets"], s["peers"],
+                    ",".join(s["transpeer_addrs"]),
+                    ";".join(f"{a}:{n}" for a, n in sorted(s["peer_sources"].items())),
+                )
+            except Exception as e:
+                log.error("Snapshot error: %s", e)
 
     async def _candidate_loop(self):
         """Periodically probe IPs that queried us."""

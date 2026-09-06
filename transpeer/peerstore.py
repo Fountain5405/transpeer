@@ -2,6 +2,8 @@
 
 import asyncio
 import base64
+import ipaddress
+import random
 import time
 from dataclasses import dataclass, field
 
@@ -356,27 +358,53 @@ class PeerStore:
 
     # -- Transpeers --
 
-    @staticmethod
-    def _subnet_16(addr: str) -> str:
-        """Extract /16 subnet prefix from an IPv4 address."""
-        parts = addr.split(".")
-        if len(parts) >= 2:
-            return f"{parts[0]}.{parts[1]}"
-        return addr
+    def _bucket_of(self, addr: str) -> str:
+        """Diversity bucket an address belongs to: its /N prefix, N from config.
 
-    def _count_transpeers_in_subnet(self, subnet: str) -> int:
+        /16 in production. Simulations use a longer prefix so a small scan
+        range can still hold many distinct buckets.
+        """
+        prefix = self.config.subnet_prefix
+        try:
+            n = int(ipaddress.IPv4Address(addr))
+        except (ipaddress.AddressValueError, ValueError):
+            return addr
+        if prefix <= 0:
+            return "0"
+        mask = (0xFFFFFFFF << (32 - prefix)) & 0xFFFFFFFF
+        return f"{ipaddress.IPv4Address(n & mask)}/{prefix}"
+
+    def _transpeers_by_bucket(self) -> dict[str, list[TranspeerEntry]]:
+        buckets: dict[str, list[TranspeerEntry]] = {}
+        for t in self._transpeers.values():
+            buckets.setdefault(self._bucket_of(t.addr), []).append(t)
+        return buckets
+
+    def _count_transpeers_in_bucket(self, bucket: str) -> int:
         return sum(
             1 for t in self._transpeers.values()
-            if self._subnet_16(t.addr) == subnet
+            if self._bucket_of(t.addr) == bucket
         )
+
+    def transpeer_bucket_count(self) -> int:
+        return len({self._bucket_of(t.addr) for t in self._transpeers.values()})
 
     async def add_transpeer(self, entry: TranspeerEntry, gossiped: bool = False) -> bool:
         """Add or update a transpeer. Returns True if new.
 
         Args:
             gossiped: True if this transpeer was learned from another transpeer's
-                /transpeers endpoint. False if discovered directly by scanning.
-                Subnet diversity limits only apply to gossiped transpeers.
+                /transpeers endpoint. False if discovered directly by scanning
+                or by probing a candidate that contacted us.
+
+        Default policy: the per-bucket limit applies to gossiped entries only,
+        on the theory that direct discoveries are diverse by construction.
+        That does not hold for the candidate path, where any IP that sends
+        one request gets probed and admitted, so a flood from a single
+        subnet can fill the store. Under --bucketed the limit applies to
+        every path, and eviction targets the most crowded bucket instead of
+        the globally oldest entry, so re-announcing cannot push honest
+        transpeers out.
         """
         async with self._lock:
             existing = self._transpeers.get(entry.key)
@@ -387,23 +415,19 @@ class PeerStore:
                 await self._save_transpeer(existing)
                 return False
 
-            # Enforce /16 subnet diversity limit for gossiped transpeers only.
-            # Directly scanned transpeers are inherently diverse (random sampling).
-            if gossiped:
-                subnet = self._subnet_16(entry.addr)
-                if self._count_transpeers_in_subnet(subnet) >= MAX_TRANSPEERS_PER_SUBNET:
+            bucket = self._bucket_of(entry.addr)
+            if gossiped or self.config.bucketed:
+                if self._count_transpeers_in_bucket(bucket) >= MAX_TRANSPEERS_PER_SUBNET:
                     return False
 
-            # Enforce total transpeer cap. When full, evict the oldest entry
-            # (lowest last_seen) to make room for fresh discoveries.
+            # Enforce total transpeer cap. When full, make room.
             if len(self._transpeers) >= MAX_TRANSPEERS_TRACKED:
-                oldest_key = min(
-                    self._transpeers.keys(),
-                    key=lambda k: self._transpeers[k].last_seen,
-                )
-                del self._transpeers[oldest_key]
+                evict_key = self._pick_eviction(bucket)
+                if evict_key is None:
+                    return False
+                del self._transpeers[evict_key]
                 if self._db:
-                    parts = oldest_key.split(":")
+                    parts = evict_key.split(":")
                     await self._db.execute(
                         "DELETE FROM transpeers WHERE addr=? AND port=?",
                         (parts[0], int(parts[1])),
@@ -413,15 +437,62 @@ class PeerStore:
             await self._save_transpeer(entry)
             return True
 
+    def _pick_eviction(self, incoming_bucket: str) -> str | None:
+        """Choose which transpeer to drop when the store is full.
+
+        Default: the least recently seen entry. Bucketed: the least recently
+        seen member of the most populated bucket, never the newcomer's own
+        bucket while another is tied for fullest. If the newcomer's bucket is
+        the unique fullest, the newcomer is refused instead, so a flood from
+        one subnet only ever displaces itself.
+        """
+        if not self.config.bucketed:
+            return min(
+                self._transpeers.keys(),
+                key=lambda k: self._transpeers[k].last_seen,
+            )
+        buckets = self._transpeers_by_bucket()
+        max_size = max(len(m) for m in buckets.values())
+        fullest = [b for b, m in buckets.items()
+                   if len(m) == max_size and b != incoming_bucket]
+        if not fullest:
+            return None
+        victim = min(buckets[random.choice(fullest)], key=lambda t: t.last_seen)
+        return victim.key
+
     def get_transpeers(self) -> list[TranspeerEntry]:
         return list(self._transpeers.values())
 
     def get_transpeers_for_query(self, limit: int) -> list[TranspeerEntry]:
-        """Return up to `limit` transpeers, oldest-queried first (rotation)."""
-        return sorted(
-            self._transpeers.values(),
-            key=lambda t: t.last_queried,
-        )[:limit]
+        """Return up to `limit` transpeers to query this cycle.
+
+        Default: oldest-queried first, so rotation eventually reaches every
+        entry. Bucketed: visit buckets in random order taking the oldest-
+        queried member of each, wrapping around until the batch is full. An
+        attacker's share of the batch is then their share of buckets, not of
+        entries.
+        """
+        if not self.config.bucketed:
+            return sorted(
+                self._transpeers.values(),
+                key=lambda t: t.last_queried,
+            )[:limit]
+        queues = [
+            sorted(members, key=lambda t: t.last_queried)
+            for members in self._transpeers_by_bucket().values()
+        ]
+        random.shuffle(queues)
+        picked: list[TranspeerEntry] = []
+        while queues and len(picked) < limit:
+            remaining = []
+            for q in queues:
+                if len(picked) >= limit:
+                    break
+                picked.append(q.pop(0))
+                if q:
+                    remaining.append(q)
+            queues = remaining
+        return picked
 
     def mark_queried(self, addr: str, port: int):
         """Record that we just queried a transpeer."""
@@ -434,20 +505,56 @@ class PeerStore:
                                   exclude_addr: str = "") -> list[TranspeerEntry]:
         """Return up to `limit` transpeers to share via /transpeers.
 
-        Samples weighted toward recently-seen transpeers so we gossip
-        about live ones. Excludes the requester's own IP.
+        Default: sample weighted toward recently-seen transpeers so we gossip
+        about live ones. Bucketed: pick a bucket uniformly, then a recent
+        member of it, so gossip carries bucket diversity rather than raw
+        population. Excludes the requester's own IP.
         """
-        import random
         candidates = [
             t for t in self._transpeers.values()
             if t.addr != exclude_addr
         ]
         if len(candidates) <= limit:
             return candidates
-        # Weighted sample favoring recently-seen transpeers
         now = int(time.time())
-        weights = [max(1, 86400 - (now - t.last_seen)) for t in candidates]
-        return random.choices(candidates, weights=weights, k=limit)
+
+        def recency(t):
+            return max(1, 86400 - (now - t.last_seen))
+
+        if not self.config.bucketed:
+            weights = [recency(t) for t in candidates]
+            return random.choices(candidates, weights=weights, k=limit)
+
+        buckets: dict[str, list[TranspeerEntry]] = {}
+        for t in candidates:
+            buckets.setdefault(self._bucket_of(t.addr), []).append(t)
+        keys = list(buckets)
+        picked: list[TranspeerEntry] = []
+        seen: set[str] = set()
+        # Bounded attempts: with few buckets and many slots, draws repeat.
+        for _ in range(limit * 4):
+            if len(picked) >= limit:
+                break
+            members = buckets[random.choice(keys)]
+            t = random.choices(members, weights=[recency(m) for m in members], k=1)[0]
+            if t.key not in seen:
+                seen.add(t.key)
+                picked.append(t)
+        return picked
+
+    def snapshot(self) -> dict:
+        """Compact store composition for STORE_SNAPSHOT logging."""
+        by_source: dict[str, int] = {}
+        for p in self._peers.values():
+            src = p.source_addr or "local"
+            by_source[src] = by_source.get(src, 0) + 1
+        return {
+            "transpeers": len(self._transpeers),
+            "buckets": self.transpeer_bucket_count(),
+            "transpeer_addrs": sorted(t.addr for t in self._transpeers.values()),
+            "peers": len(self._peers),
+            "peer_sources": by_source,
+        }
 
     async def _save_transpeer(self, entry: TranspeerEntry):
         if not self._db:

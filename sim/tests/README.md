@@ -22,13 +22,13 @@ Results are appended to `results.txt` and log output to `run.log`.
 
 | ID | Category | Purpose | Status |
 |----|----------|---------|--------|
-| [scale_baseline](#scale_baseline) | Scale | Find upper bound of hosts on this machine | partial (700 confirmed) |
+| [scale_baseline](scale_baseline/) | Scale | Find upper bound of hosts on this machine | running (64-thread / 251 GB box) |
 | [cross_network](#cross_network) | Discovery | Verify cross-network peer propagation | done |
 | [attacker_ratio](attacker_ratio/) | Attack | Impact of N% attackers injecting fake peers | done |
 | [handshake_pow](handshake_pow/) | Defense | Adaptive handshake PoW under distributed flood | done |
 | [sybil_subnet](#sybil_subnet) | Attack | /16 subnet domination via Sybil transpeers | pending |
 | [slow_burn_inject](#slow_burn_inject) | Attack | Slow-drip injection under per-source cap | pending |
-| [bootstrap_eclipse](#bootstrap_eclipse) | Attack | Attacker saturates network before honest nodes | pending |
+| [bootstrap_eclipse](bootstrap_eclipse/) | Attack | Attacker saturates network before honest nodes | queued, redesigned as a defense test |
 | [distributed_ddos_multi](#distributed_ddos_multi) | Attack | Distributed flood across many victim transpeers | pending |
 | [long_running](#long_running) | Stability | Store / cache / rotation behavior over hours | pending |
 | [honest_under_attack](#honest_under_attack) | UX | Bootstrapping honest node succeeds under attack | pending |
@@ -232,8 +232,8 @@ Results are appended to `results.txt` and log output to `run.log`.
 
 All tests use:
 - `sim/gen_scale_test.py` (or test-local `gen_config.py`) for config generation
-- Shadow 3.2.0 from `/home/lever65/monerosim_dev/shadowformonero/build/src/main/shadow`
-- Python 3.12 with transpeer deps installed
+- Shadow 3.2.0; binary path, interpreter and storage roots come from `sim/simenv.sh`
+- Python 3.12 venv at `.venv` (system python on the current box is 3.8)
 
 Simulation flags used consistently:
 - `--in-memory`: skip SQLite (Shadow FS issues)
@@ -255,4 +255,10 @@ Per-scenario CSV columns should include:
 
 - **No peer verification at scale**: because `--static-peers` entries have no TCP listener, `--no-verify` must be used. Verification defense tested only at smaller scale with Python fake_daemon.py. See `TODO/bash_daemon_for_scale.md`.
 - **Sim-pow dummy proofs**: simulated PoW uses a magic marker that both sides recognize. Real EquiX verification is bypassed in sim mode.
-- **Memory ceiling**: ~700 hosts on a 31 GB machine. Bigger tests need a bigger machine or optimizations.
+- **Memory ceiling**: ~700 hosts on the original 31 GB machine. The current box has 251 GB
+  and 128 GB of fast swap; scale_baseline is re-measuring the ceiling, which is now
+  expected to be wall-clock rather than memory.
+- **Single /16 in every sim so far**: the IP allocator in `gen_scale_test.py` only varies
+  the second octet past host 65536, so every host has shared one /16 and the subnet limit
+  has never been exercised. bootstrap_eclipse introduces `--subnet-prefix` and a bucketed
+  allocator; sybil_subnet should reuse them.

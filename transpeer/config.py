@@ -50,6 +50,15 @@ class Config:
     share_white_list: bool = False  # Share full white list instead of connected peers
     static_peers: dict[str, list[tuple[str, int]]] | None = None  # Preset peers per network
     no_verify: bool = False  # Disable peer verification loop (for simulation only)
+    # Transpeer diversity buckets are IPv4 prefixes: /16 in production. A
+    # simulation with a small scan range uses a longer prefix so it can
+    # still hold many distinct buckets.
+    subnet_prefix: int = 16
+    # Bucketed policy: per-bucket admission cap on every discovery path,
+    # eviction from the most crowded bucket, bucket-uniform query and gossip.
+    bucketed: bool = False
+    # Log a STORE_SNAPSHOT line every N seconds (0 = off). Simulation metric.
+    snapshot_interval: int = 0
 
     def __post_init__(self):
         if not self.in_memory:
@@ -97,6 +106,19 @@ def parse_args() -> Config:
         "--no-verify", action="store_true",
         help="Disable peer verification loop (simulation/testing only).",
     )
+    parser.add_argument(
+        "--subnet-prefix", type=int, default=16,
+        help="Prefix length of a transpeer diversity bucket (default /16).",
+    )
+    parser.add_argument(
+        "--bucketed", action="store_true",
+        help="Bucketed transpeer policy: cap every discovery path per bucket, "
+             "evict from the fullest bucket, query and gossip bucket-uniform.",
+    )
+    parser.add_argument(
+        "--snapshot-interval", type=int, default=0,
+        help="Log store composition every N seconds (simulation metric).",
+    )
     args = parser.parse_args()
     return Config(
         port=args.port,
@@ -111,6 +133,9 @@ def parse_args() -> Config:
         share_white_list=args.share_white_list,
         static_peers=_parse_static_peers(args.static_peers),
         no_verify=args.no_verify,
+        subnet_prefix=args.subnet_prefix,
+        bucketed=args.bucketed,
+        snapshot_interval=args.snapshot_interval,
     )
 
 
