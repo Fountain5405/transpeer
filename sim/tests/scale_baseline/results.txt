@@ -1,0 +1,11 @@
+# Transpeer scale_baseline experiment
+# Machine: 64 threads, 251 GB RAM
+# Shadow: Shadow 3.2.0 — v3.2.0-0-gdb81738 2024-06-07--09:55:40
+# Simulated time: 900s, seed: 42, parallelism: 60
+# Started: Sun 06 Sep 2026 01:12:01 PM UTC
+
+hosts,real_time_sec,sim_advance_ratio,run_mem_mb,abs_peak_mem_mb,peak_swap_mb,data_size_mb,honest1_discovered,status
+700,435,2.069,23287,62837,0,583,611,ok
+1500,1215,0.741,59744,99308,0,2296,1444,ok
+3000,2583,0.348,156173,195735,0,7382,2860,ok
+5000,0,0,0,0,0,0,0,aborted_memory
