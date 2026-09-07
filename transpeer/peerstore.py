@@ -584,8 +584,11 @@ class PeerStore:
             by_source[src] = by_source.get(src, 0) + 1
             n = len(p.vouchers) if self.config.vouchers else p.sources
             hist[n] = hist.get(n, 0) + 1
+        def depth(p):
+            return len(p.vouchers) if self.config.vouchers else p.sources
+
         daemon_view = {
-            net: [p.source_addr or "local"
+            net: [f"{p.source_addr or 'local'}:{depth(p)}"
                   for p in self.get_peers(net, verified_only=False)[:top]]
             for net in (networks or [])
         }

@@ -52,7 +52,7 @@ if [ ! -f "$RESULTS" ]; then
         echo "# Machine: $(nproc) threads, $(free -g | awk '/^Mem:/{print $2}') GB RAM, parallelism: $SIM_PARALLELISM"
         echo "# Started: $(date)"
         echo ""
-        echo "scenario,attackers,attacker_subnets,policy,real_time_sec,run_mem_mb,store_total,store_attacker_pct,honest_known,buckets,queries_total,query_attacker_pct,peers_total,peer_attacker_pct,multi_voucher_pct,daemon_attacker_pct,snapshots,status"
+        echo "scenario,attackers,attacker_subnets,policy,real_time_sec,run_mem_mb,store_total,store_attacker_pct,honest_known,buckets,queries_total,query_attacker_pct,peers_total,peer_attacker_pct,multi_voucher_pct,daemon_attacker_pct,top20_honest_max_vouchers,top20_attacker_min_vouchers,snapshots,status"
     } > "$RESULTS"
 fi
 
@@ -78,14 +78,14 @@ run_scenario() {
     local FREE_GB; FREE_GB=$(free_disk_gb)
     if [ "${FREE_GB:-0}" -lt "$MIN_FREE_DISK_GB" ]; then
         echo "ABORT: only ${FREE_GB}GB free on $DATA_ROOT"
-        echo "$NAME,$A,$S,$POLICY,0,0,0,0.0,0,0,0,0.0,0,0.0,0.0,0.0,0,aborted_disk" >> "$RESULTS"
+        echo "$NAME,$A,$S,$POLICY,0,0,0,0.0,0,0,0,0.0,0,0.0,0.0,0.0,0,0,0,aborted_disk" >> "$RESULTS"
         return 1
     fi
     local PROJECTED=$((TOTAL * MEM_PER_HOST_MB))
     local BUDGET=$(( $(avail_mem_mb) * MEM_HEADROOM_PCT / 100 ))
     if [ "$PROJECTED" -gt "$BUDGET" ]; then
         echo "ABORT: projected ${PROJECTED}MB exceeds ${BUDGET}MB budget"
-        echo "$NAME,$A,$S,$POLICY,0,0,0,0.0,0,0,0,0.0,0,0.0,0.0,0.0,0,aborted_memory" >> "$RESULTS"
+        echo "$NAME,$A,$S,$POLICY,0,0,0,0.0,0,0,0,0.0,0,0.0,0.0,0.0,0,0,0,aborted_memory" >> "$RESULTS"
         return 1
     fi
 

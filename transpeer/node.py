@@ -10,6 +10,7 @@ from aiohttp import web
 from .client import TranspeerClient
 from .config import (
     Config, EXTRACT_INTERVAL, QUERY_INTERVAL, SCAN_INTERVAL, QUERY_BATCH_SIZE,
+    TIMESTAMP_BUCKET_SECS,
 )
 from .networks import get_network
 from .peerstore import Peer, PeerStore
@@ -31,6 +32,9 @@ class Node:
         self.scanner = Scanner(config, self.store, self.client, self.node_id)
         self.server = None  # Created after networks are loaded
         self._networks = {}
+        # (network, addr, port) -> (nonce, solution, bucket) for peers we
+        # publish ourselves. A proof is valid for a whole timestamp bucket.
+        self._local_proofs: dict[tuple[str, str, int], tuple[bytes, bytes, int]] = {}
         for spec in config.networks:
             try:
                 net = get_network(spec)
@@ -90,7 +94,15 @@ class Node:
                     peer_infos = await self._extract_peer_infos(name, network)
                     now = int(time.time())
                     for info in peer_infos:
-                        if self.config.no_pow:
+                        # Only solve when we hold no proof for this peer in
+                        # the current bucket. Re-solving every cycle cost
+                        # one EquiX solve per peer per minute, and in
+                        # simulation each solve is a blocking sleep.
+                        cache_key = (name, info.addr, info.port)
+                        cached = self._local_proofs.get(cache_key)
+                        if cached and cached[2] == now // TIMESTAMP_BUCKET_SECS:
+                            nonce, solution, bucket = cached
+                        elif self.config.no_pow:
                             nonce, solution, bucket = b"\x00" * 16, b"\x00" * 16, 0
                         elif self.config.sim_pow:
                             nonce, solution, bucket = pow_solve_sim(
@@ -100,6 +112,7 @@ class Node:
                             nonce, solution, bucket = pow_solve(
                                 name, info.addr, info.port, self.config.difficulty,
                             )
+                        self._local_proofs[cache_key] = (nonce, solution, bucket)
                         peer = Peer(
                             network=name,
                             addr=info.addr,

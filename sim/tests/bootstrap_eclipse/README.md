@@ -257,15 +257,70 @@ peer list as a cross-check. An attacker who defeats both is running real
 reachable nodes, which is a daemon-level eclipse and outside what a
 discovery layer can prevent.
 
+## Coordinated attacker with a realistic honest peer model (`results_coordinated_v2.txt`)
+
+Two changes from the previous run. First, the honest peer model: each
+network has a population of 200 daemon peers, each honest transpeer serves
+16 of them sampled with a popularity skew (weight `1/(rank+1)^0.7`), and
+60 percent of honest nodes run the fresh node's network. In the generated
+layout 26 honest transpeers serve that network, 153 distinct peers exist,
+and the 20 most-listed peers appear in 5 to 17 honest lists each. Second,
+the node now solves a local peer's proof once per timestamp bucket instead
+of on every 60-second cycle; in simulation each solve was a blocking sleep,
+so honest nodes in earlier runs were less responsive than they should have
+been. Rows from this file are not directly comparable to earlier ones.
+
+Attacker subnets versus what the daemon receives, `bucketed_vouchers`
+policy, coordinated attacker. Depth columns are voucher counts in the top
+20: the deepest honest entry and the shallowest attacker entry.
+
+| attacker subnets | top-20 attacker share | deepest honest | shallowest attacker |
+|-----------------:|:---------------------:|:--------------:|:-------------------:|
+| 1 (50, 150 attackers)  | **0 %**   | 10 to 13 | none in top 20 |
+| 2 (500 attackers)      | **0 %**   | 10       | none in top 20 |
+| 6 (1500 attackers)     | 90 %      | 7        | 6 |
+| 10                     | 80 to 100 % | 9 to 12 | 6 to 10 |
+| 25 and up              | 100 %     | none left | 12 to 36 |
+
+**The crossover is where attacker subnets meet the depth of the 18th or
+so honest peer.** With 26 honest transpeers on the network, the fresh node
+had observed 5 to 6 vouchers for the peers at the bottom of its top 20 by
+the end of its 15 minutes. Two attacker subnets never touch the list. Six
+take 18 of 20 slots, leaving only the two honest peers deeper than six.
+Ten leave one or two. The untested band is three to five subnets.
+
+**Depth scales with the honest network, and with uptime.** The 20th
+deepest peer sat at roughly a fifth of the honest transpeers on the
+network. The same skew on a network with a thousand honest transpeers
+puts the crossover near two hundred distinct subnets, which in production
+means two hundred distinct /16s. And the fresh node observed only 5 to 6
+of a list depth of 17 for the top peers because it had queried each
+honest transpeer about once; a node that has been up longer has seen more
+vouchers, so the attack window is the bootstrap window. Both statements
+are extrapolations from one layout and need the 200-honest run to confirm.
+
+**Store-level numbers are as before.** Bucketed transpeer store share
+followed `min(A, 3S)/(min(A, 3S)+50)` to the point again. Attacker share of
+peer entries under vouchers stayed at 8 to 28 percent except in the
+200-subnet cells (42 to 55), where the attacker simply has more subnets
+than the honest network and nothing bucket-based applies. Under the current
+policy at 1500 attackers the fresh node again lost 18 to 22 of its 50
+honest transpeers to recency eviction.
+
+**The current policy's daemon view is arrival order, not a defense.** It
+reads 0 to 10 percent attacker only because the fresh node's two seeds and
+its first honest query fill the first 20 slots before any attacker is
+queried. Whatever the daemon takes past that is drawn from a store that is
+16 to 48 percent attacker entries with no ranking at all.
+
 ## Follow-ups
 
-1. Honest peer model: give honest transpeers realistic peer lists (tens of
-   peers, heavy overlap across nodes) so honest voucher depth is measured
-   rather than pinned at four. Then rerun coordinated and find the subnet
-   count where the attacker overtakes it.
-2. Daemon-view metric sized to honest supply, or reported as "rank of
-   first attacker", so it stops saturating at 65 percent.
-3. A protected "tried" table, so that even a subnet-rich attacker cannot
+1. Fill subnet counts 3, 4 and 5 at 1500 attackers to pin the crossover to
+   one number.
+2. 200 honest transpeers, to confirm depth scales with honest count. Needs
+   a wider scan range or a lower attacker bucket ceiling, since 200 honest
+   buckets plus attackers exceed the 256 /24s in a /16.
+3. Depth versus uptime: fresh node started at 300 s but measured at 40
+   simulated minutes, to see how fast observed depth approaches list depth.
+4. A protected "tried" table, so that even a subnet-rich attacker cannot
    displace transpeers that have answered over several cycles.
-4. Rerun the 25-subnet column at 40 simulated minutes to confirm query
-   share converges to the store formula.

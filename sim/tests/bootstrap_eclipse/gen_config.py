@@ -40,6 +40,17 @@ TRANSPEER_PORT = 7337
 # 250 req/s across the whole sim.
 ANNOUNCE_INTERVAL = 300
 
+# Honest peer model. Each network has a population of daemon peers (12.x.x.x,
+# outside the scan range, nothing listens there) and each honest transpeer
+# serves a sample of them, weighted so a few well-established peers appear
+# in most lists. That overlap is what gives a real peer voucher depth. The
+# fresh node's network is run by most honest nodes, the way one large
+# network dominates a real deployment.
+PEER_POPULATION = 200
+PEERS_PER_NODE = 16          # 3 networks x 16 stays under BASE_PEERS_PER_SOURCE
+POPULARITY_EXPONENT = 0.7    # weight 1/(rank+1)^e
+PRIMARY_NET_SHARE = 0.6      # honest nodes running the fresh node's network
+
 
 def network_ports(net_idx):
     base = 10000 + net_idx * 100
@@ -124,25 +135,35 @@ def gen(num_honest, num_attackers, attacker_subnets, bucketed, stop_time,
             "processes": [process],
         }
 
-    # --- Honest transpeers: networks assigned as in gen_scale_test ----------
+    # --- Honest transpeers: one dominant network plus a few small ones ------
+    fresh_net = "p2pa"
+    others = [n for n in NETWORKS if n != fresh_net]
     honest_nets = []
     for _ in range(num_honest):
-        k = random.choice([1, 1, 1, 1, 2, 2, 3])
-        honest_nets.append(random.sample(NETWORKS, k))
-    nodes_by_network = {n: [] for n in NETWORKS}
-    for i, nets in enumerate(honest_nets):
-        for n in nets:
-            nodes_by_network[n].append(i)
+        nets = [fresh_net] if random.random() < PRIMARY_NET_SHARE else []
+        nets += random.sample(others, random.choice([0, 0, 1, 1, 2]))
+        if not nets:
+            nets.append(random.choice(others))
+        honest_nets.append(nets)
 
-    def static_peers_for(nets, self_idx):
+    def daemon_peer_ip(net, rank):
+        return f"12.{NETWORKS.index(net)}.{rank // 250}.{rank % 250 + 1}"
+
+    weights = [1.0 / (r + 1) ** POPULARITY_EXPONENT for r in range(PEER_POPULATION)]
+
+    def sample_population(k):
+        """k distinct ranks; popular ones far more likely."""
+        chosen = set()
+        while len(chosen) < k:
+            chosen.add(random.choices(range(PEER_POPULATION), weights=weights, k=1)[0])
+        return sorted(chosen)
+
+    def static_peers_for(nets, k=PEERS_PER_NODE):
         parts = []
         for net in nets:
             p2p, _ = network_ports(NETWORKS.index(net))
-            pool = [i for i in nodes_by_network[net] if i != self_idx]
-            sample = random.sample(pool, min(4, len(pool)))
-            if sample:
-                peers = ",".join(f"{bucket_ip(i, 1)}:{p2p}" for i in sample)
-                parts.append(f"{net}:{peers}")
+            peers = ",".join(f"{daemon_peer_ip(net, r)}:{p2p}" for r in sample_population(k))
+            parts.append(f"{net}:{peers}")
         return ";".join(parts)
 
     honest_ips = []
@@ -156,7 +177,7 @@ def gen(num_honest, num_attackers, attacker_subnets, bucketed, stop_time,
                 f"--scan-range {SCAN_RANGE} --difficulty {difficulty} "
                 f"--networks {specs} --in-memory --sim-pow --no-verify"
                 + policy_flags)
-        sp = static_peers_for(nets, i)
+        sp = static_peers_for(nets)
         if sp:
             args += f" --static-peers '{sp}'"
         host(f"honest{i+1}", ip, transpeer_process(args, 3))
@@ -164,17 +185,13 @@ def gen(num_honest, num_attackers, attacker_subnets, bucketed, stop_time,
     # --- Fresh node: one network, starts late, snapshots its store ----------
     fresh_bucket = num_honest
     fresh_ip = bucket_ip(fresh_bucket, 1)
-    fresh_net = "p2pa"
     p2p, rpc = network_ports(NETWORKS.index(fresh_net))
     args = (f"-m transpeer --bind 0.0.0.0 --port {TRANSPEER_PORT} "
             f"--scan-range {SCAN_RANGE} --difficulty {difficulty} "
             f"--networks {fresh_net}:{p2p}:{rpc} --in-memory --sim-pow --no-verify"
             f" --snapshot-interval {snapshot_interval}" + policy_flags)
-    sp = static_peers_for([fresh_net], -1)
-    if sp:
-        # Two seeds only: a real fresh daemon knows a handful of addresses.
-        net, peers = sp.split(":", 1)
-        args += f" --static-peers '{net}:{','.join(peers.split(',')[:2])}'"
+    # Two seeds only: a real fresh daemon knows a handful of addresses.
+    args += f" --static-peers '{static_peers_for([fresh_net], k=2)}'"
     host("fresh", fresh_ip, transpeer_process(args, fresh_start))
 
     # --- Attackers: fake peers + self-announce to every honest transpeer ----

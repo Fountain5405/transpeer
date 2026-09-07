@@ -8,11 +8,15 @@ the node itself, and everything from `first_attacker_bucket` up is attacker.
 Prints one CSV fragment on stdout:
   store_total,store_attacker_pct,honest_known,buckets,
   queries_total,query_attacker_pct,peers_total,peer_attacker_pct,
-  multi_voucher_pct,daemon_attacker_pct,snapshots
+  multi_voucher_pct,daemon_attacker_pct,
+  top20_honest_max_vouchers,top20_attacker_min_vouchers,snapshots
 
 multi_voucher_pct: share of peer entries reported by two or more distinct
 buckets. daemon_attacker_pct: share of the top-20 peers per network, in the
 order get_peers hands them out, whose source is an attacker.
+top20_honest_max_vouchers / top20_attacker_min_vouchers: the deepest honest
+entry and the shallowest attacker entry in that list, so the crossover
+between honest voucher depth and attacker subnet count is visible.
 """
 
 import argparse
@@ -69,12 +73,13 @@ def main():
                     snapshots += 1
                     last_snap = m
     except FileNotFoundError:
-        print("0,0.0,0,0,0,0.0,0,0.0,0.0,0.0,0")
+        print("0,0.0,0,0,0,0.0,0,0.0,0.0,0.0,0,0,0")
         sys.exit(0)
 
     store_total = store_attacker = honest_known = buckets = 0
     peers_total = peers_attacker = 0
     multi = hist_total = dv_total = dv_attacker = 0
+    hon_max, att_min = 0, None
     if last_snap:
         store_total = int(last_snap.group(1))
         buckets = int(last_snap.group(2))
@@ -100,12 +105,17 @@ def main():
         if last_snap.group(7):
             for net_block in last_snap.group(7).split("|"):
                 _, _, srcs = net_block.partition(":")
-                for src in srcs.split(","):
-                    if not src:
+                for item in srcs.split(","):
+                    if not item:
                         continue
+                    src, _, n = item.rpartition(":")
+                    d = int(n) if n.isdigit() else 0
                     dv_total += 1
                     if src != "local" and cls(src) == "attacker":
                         dv_attacker += 1
+                        att_min = d if att_min is None else min(att_min, d)
+                    else:
+                        hon_max = max(hon_max, d)
 
     q_total = sum(queries.values())
     print(",".join([
@@ -113,6 +123,7 @@ def main():
         str(q_total), pct(queries["attacker"], q_total),
         str(peers_total), pct(peers_attacker, peers_total),
         pct(multi, hist_total), pct(dv_attacker, dv_total),
+        str(hon_max), str(att_min or 0),
         str(snapshots),
     ]))
 

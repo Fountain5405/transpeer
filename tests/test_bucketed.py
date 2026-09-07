@@ -235,7 +235,7 @@ async def test_vouchers():
     order = [p.addr for p in s.get_peers("x", verified_only=False)]
     check(order == ["3.0.0.2", "3.0.0.3", "3.0.0.1"], "get_peers ranks by voucher count")
     snap = s.snapshot(networks=["x"])
-    check(snap["voucher_hist"] == {1: 1, 2: 1, 3: 1} and snap["daemon_view"]["x"][0] == "11.0.5.1",
+    check(snap["voucher_hist"] == {1: 1, 2: 1, 3: 1} and snap["daemon_view"]["x"][0] == "11.0.5.1:3",
           "snapshot reports the voucher histogram and the daemon's view in rank order")
 
 
