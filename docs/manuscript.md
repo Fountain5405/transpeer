@@ -393,7 +393,8 @@ attackers share a seed for the fake set.
 
 **Timeline.** Honest and attacker hosts start at t = 3 s; the fresh node at
 t = 300 s; stop at t = 1200 s. The fresh node queries every 300 s, so it
-completes three query cycles of 20.
+issues two query batches of 20 within the window; a third begins at the
+stop time. (An earlier draft said three; see Appendix A.)
 
 **Metrics** are parsed from the fresh node's log. A `STORE_SNAPSHOT` line
 every 60 s carries the transpeer store, per-source peer counts, a voucher
@@ -401,11 +402,14 @@ histogram, and the source and voucher depth of each of the first 20 peers
 `get_peers` would return for the fresh node's network. Attacker and
 honest are classified by bucket index.
 
-**Seeds and variance.** The generator is seeded (42), so the honest
-layout and attacker placement are identical across cells. The nodes' own
-random choices (scan order, node identifiers, gossip samples) are not
-seeded, so the fresh node's observations vary between cells of equal
-configuration. Each cell was run once. See §10.
+**Seeds and variance.** From §8.9 on, one seed drives both the generator
+(honest layout, attacker placement) and Shadow's `general.seed`, from
+which every simulated host's randomness derives. Two runs of one config
+are therefore identical, and a replica is a different seed. Before §8.9
+the Shadow seed was left at its default, so cells of equal configuration
+would have been identical and the variance reported in §8.8 came from
+configs that differed in host count. §8.9 has five seeds per cell; every
+other experiment has one. See §10.
 
 **Runtime.** Cells of 101 to 1551 hosts took 60 to 315 s wall-clock each.
 The 30-cell grid of §8.4 took 40 minutes. Scale limits are in §8.1.
@@ -543,7 +547,102 @@ The attacker enters at four prefixes. The step is sharp because every fake
 ties at exactly `S` vouchers and many honest peers in the top 20 had been
 observed only three or four times. The share at `S` is, to first
 approximation, the fraction of the honest top 20 whose observed depth is
-at most `S`.
+at most `S`. §8.9 replicates this with five seeds.
+
+### 8.9 Crossover replicas (`results_crossover_seeds.txt`)
+
+Five seeds per cell, each seeding both the generator and Shadow. 500
+attackers, 15-minute window, bucketed with vouchers, coordinated.
+
+| prefixes | top-20 attacker share, mean (min, max) | store share across seeds |
+|---------:|:--------------------------------------:|:------------------------:|
+| 3 | 2 (0, 10)   | 15.0 to 15.3 |
+| 4 | 26 (5, 45)  | 19.0 to 19.4 |
+| 5 | 61 (45, 75) | 22.7 to 23.1 |
+| 6 | 76 (60, 85) | 26.1 to 26.5 |
+| 8 | 88 (85, 95) | 32.0 to 32.4 |
+
+Store share is deterministic to within half a point across seeds, as the
+closed form predicts. The daemon-view share near the crossover varies by
+about ±20 points between seeds. The attacker enters at four prefixes in
+five of five replicas and holds a majority from five. The single-seed 55
+percent at four prefixes in §8.8 was at the high end of its range.
+
+### 8.10 Depth against uptime (`results_uptime_*.txt`)
+
+Seed 1, 500 attackers, prefixes 4 and 6, fresh node started at 300 s and
+measured at windows of 15, 30, 60 and 120 minutes.
+
+| window | queries issued | S = 4 top-20 share | S = 6 top-20 share | deepest honest |
+|-------:|---------------:|:------------------:|:------------------:|:--------------:|
+| 15 min  | 40  | 45 % | 75 % | 11 to 13 |
+| 30 min  | 100 | 0 %  | 55 % | 18 to 21 |
+| 60 min  | 220 | 0 %  | 30 % | 23 |
+| 120 min | 460 | 0 %  | 30 % | 23 |
+
+From the 120-minute run's per-minute snapshots, at four prefixes the
+attacker peaks at 15 of 20 slots in minute 10, right after the first query
+batch, falls to 9 by minute 15, 4 by minute 20, and is gone from minute
+25 on. At six prefixes the peak is 19 of 20 at minute 10, 11 at minute 30,
+and 6 from minute 40 onward, where it stays: fourteen honest peers end up
+deeper than six and the remaining six slots go to fakes. Observed honest
+depth reaches its ceiling of 23, the list depth of the seed-1 layout, by
+minute 50. The bootstrap window is minutes 10 to 25.
+
+### 8.11 200 honest transpeers (`results_h200_*.txt`)
+
+Seed 1, 200 honest transpeers of which about 120 serve the fresh node's
+network, 500 attackers, prefixes 8 to 48. The fresh node knew all 200
+honest transpeers by the end of even the 15-minute window.
+
+| prefixes | 15 min: share, honest max / attacker min | 60 min: share, honest max / attacker min |
+|---------:|:----------------------------------------:|:----------------------------------------:|
+| 8  | 0 %,  15 / none | 0 %,  59 / none |
+| 16 | 25 %, 21 / 6    | 0 %,  62 / none |
+| 24 | 25 %, 16 / 5    | 0 %,  58 / none |
+| 32 | 90 %, 14 / 11   | 65 %, 50 / 24   |
+| 48 | 80 %, 18 / 9    | 75 %, 60 / 29   |
+
+At 60 minutes the crossover lies between 24 and 32 prefixes, against
+between 4 and 6 for 50 honest (§8.10). Honest transpeers on the network
+rose 4.6-fold (26 to about 120) and the crossover rose about 5.6-fold.
+The deepest honest peer rose 2.6-fold (23 to about 60), less than
+linearly, because a peer cannot be reported by more transpeers than serve
+the network and the top peers were already in most lists.
+
+Two further observations. The attacker's observed depth is throttled by
+the victim's query budget exactly as the honest side's is: with 32 to 48
+attacker prefixes the fresh node had seen only 5 to 11 vouchers per fake
+at 15 minutes and 24 to 29 at 60. And at 15 minutes the larger honest
+network already did better than the small one at the same window
+(honest depth 14 to 21 against 11 to 13), because many honest transpeers
+report the same popular peers and the victim's 40 queries land mostly on
+honest transpeers.
+
+### 8.12 Tried table against late attackers (`results_tried_late.txt`)
+
+Seed 1. The fresh node starts at 300 s; 1500 attackers start at 1500 s,
+after it has completed four query batches; measured at 3000 s.
+
+| policy | prefixes | honest retained (of 50) | tried entries (honest) | store share | top-20 share |
+|--------|---------:|:-----------------------:|:----------------------:|:-----------:|:------------:|
+| current                    | 6   | 40 | —       | 91.8 | 0, arrival order |
+| current + tried            | 6   | 49 | 42 (42) | 90.0 | 0, arrival order |
+| bucketed + vouchers        | 6   | 50 | —       | 26.1 | 0 |
+| bucketed + vouchers + tried| 6   | 50 | 43 (43) | 26.1 | 0 |
+| current                    | 200 | 40 | —       | 91.8 | 0, arrival order |
+| current + tried            | 200 | 49 | 42 (42) | 90.0 | 0, arrival order |
+| bucketed + vouchers        | 200 | 50 | —       | 89.8 | 100 |
+| bucketed + vouchers + tried| 200 | 50 | 38 (38) | 89.8 | 100 |
+
+Under the current policy an established node lost 10 of 50 honest
+transpeers to 25 minutes of flood, against 18 to 28 for a fresh node
+(§8.4, §8.7); the tried table kept 49. Under bucketing the tried table
+changed nothing: fullest-bucket eviction already never touches a bucket
+holding a single honest entry, and all 50 were retained with or without
+it. No attacker became tried in any cell. The tried table does not act on
+peer ranking, so at 200 prefixes the fakes' 37 to 43 vouchers took the
+daemon's list regardless.
 
 ---
 
@@ -571,13 +670,22 @@ peer when `S` exceeds that depth. In our layout the peers at the bottom of
 the daemon's top 20 had depth 3 to 4 after 15 minutes, so the attacker
 enters at `S = 4` and holds 90 percent at `S = 8`.
 
-Depth has two multipliers the attacker does not control. It grows with
-the number of honest transpeers on the network: the 20th-deepest peer sat
-at roughly a fifth of the 26 honest transpeers on the network, so the
-same skew at 1000 honest transpeers puts the crossover near 200 prefixes.
-*(extrapolated)* And it grows with the victim's uptime: the fresh node had
-observed 5 to 6 of a list depth of 17 for the top peers, because it had
-queried each honest transpeer about once. *(extrapolated; see §11)*
+Depth has two multipliers the attacker does not control, both now
+measured on one seed each. It grows with the number of honest transpeers
+on the network: the crossover moved from 4 to 6 prefixes at 26 honest
+transpeers on the network to 24 to 32 at about 120, a 5.6-fold rise for a
+4.6-fold rise in honest count (§8.11). Extrapolating the same ratio, a
+network with 1000 honest transpeers would put the crossover near 200
+prefixes; that step remains an extrapolation. And it grows with the
+victim's uptime: at four prefixes the attacker held up to 15 of 20 slots
+in the tenth minute and none from the 25th, and observed honest depth
+reached its list-depth ceiling by minute 50 (§8.10). The attack window is
+the first half hour after a node joins.
+
+The victim's query budget throttles both sides equally (§8.11), so the
+crossover in prefixes is a ratio of honest to attacker *reporting*
+capacity, not of raw depth; batch size and query interval are therefore
+design parameters of the defense as well as of load.
 
 ### 9.3 Where the defenses stop
 
@@ -591,7 +699,17 @@ trust anchors, the daemon's own peer list as a cross-check, and
 verification, which is disabled in these simulations and would mark
 unreachable fakes dead within minutes.
 
-### 9.4 What does not help
+### 9.4 The tried table is redundant under bucketing
+
+Protecting entries that have answered twice fixed the residual honest loss
+of the current policy for an established node (40 to 49 of 50 retained)
+and did nothing under bucketing, where fullest-bucket eviction already
+protects any bucket holding a lone honest entry. It also does not act on
+the daemon's peer ranking. We keep it as a cheap belt for deployments
+that cannot adopt bucketing, and note that under bucketing with cap 3 the
+case it guards against does not arise.
+
+### 9.5 What does not help
 
 Proof-of-work on transpeer identity: compute is cheaper than addresses and
 amortizes across victims. Liveness verification alone: an adversary
@@ -603,13 +721,12 @@ of addresses by construction.
 
 ## 10. Threats to validity
 
-- **Single run per cell.** The honest layout is seeded; the nodes' scan
-  and query order are not. Observed honest depth varied from 6 to 13
-  across equal-configuration cells, and the six-prefix cell read 65
-  percent at 500 attackers and 90 at 1500. Store-share results are
-  deterministic to within a point; daemon-view results near the
-  crossover are not. Several seeds per cell are needed before quoting a
-  crossover tighter than "four".
+- **Seeds.** The crossover (§8.9) has five seeds per cell and the
+  daemon-view share varies by about ±20 points between them near the
+  crossover; store share is deterministic to within half a point. Every
+  other experiment is one seed, including the uptime, 200-honest and
+  tried-table runs. Before §8.9 the Shadow seed was not varied, so the
+  §8.8 variance came from host-count differences rather than replicas.
 - **No peer verification.** Fakes are never probed. In production the
   verifier removes unreachable entries and contracts the source's
   budget; our numbers are therefore an upper bound on the attacker's
@@ -644,21 +761,25 @@ of addresses by construction.
 
 ## 11. Future work
 
-1. Several seeds per cell around the crossover, and a longer fresh-node
-   window to measure how observed depth approaches list depth.
-2. 200 honest transpeers, to test the depth-scales-with-population
-   extrapolation. Needs a wider scan range or lower attacker bucket
-   ceiling; 200 honest buckets plus attackers exceed the 256 `/24`s in a
-   `/16`.
-3. A protected "tried" table for transpeers that have answered over
-   several cycles, so even a prefix-rich attacker cannot displace them.
-4. Autonomous-system buckets via an asmap-style file.
-5. Enable verification at scale, which requires lightweight fake daemons
+1. Replicas for the uptime, 200-honest and tried-table experiments, which
+   are single-seed.
+2. Honest counts beyond 200, to test whether the crossover keeps scaling
+   linearly. Needs a `/15` scan range or a smaller attacker bucket
+   ceiling, since 200 honest buckets plus attackers already fill most of
+   a `/16`.
+3. Query budget as a defense parameter: batch size and interval set how
+   fast both honest and attacker depth are observed (§9.2); measure the
+   bootstrap window against them.
+4. Tie-breaking at equal depth. Fakes tie honest peers exactly at `S`;
+   the current tie-break is verified flag then recency, and a deliberate
+   rule (older first, or verified only) may shift the crossover by one.
+5. Autonomous-system buckets via an asmap-style file.
+6. Enable verification at scale, which requires lightweight fake daemons
    (see `TODO/bash_daemon_for_scale.md`), to measure the peer-level upper
    bound against the real behaviour.
-6. Price the attack: `/16` rental cost by provider, so the cost statement
+7. Price the attack: `/16` rental cost by provider, so the cost statement
    in §9.2 is in currency.
-7. Cross-source consistency checks (chain height and tip via the daemon
+8. Cross-source consistency checks (chain height and tip via the daemon
    handshake) as a defense in the regime of §9.3.
 
 ---
@@ -678,6 +799,8 @@ of writing.
 | `564b91d` | bootstrap-eclipse | coordinated attacker (§8.6) |
 | `82070b2` | bootstrap-eclipse | honest peer model, proof cache, depth metric (§8.7) |
 | `f00175e` | bootstrap-eclipse | crossover fill (§8.8) |
+| `c8c2134` | bootstrap-eclipse | `--tried-table`, Shadow seed, `--attacker-start`, replicas, `run_followups.sh`; protocol section |
+| results commit following `c8c2134` | bootstrap-eclipse | §8.9 to §8.12 results, this revision |
 | `2b16d6a`, `bcd5169` | master (earlier) | adaptive handshake PoW and its experiment (§8.2) |
 | `f98736a` | master (earlier) | attacker_ratio (§8.3) |
 
@@ -693,9 +816,11 @@ with the interpretation at the time. Runs:
       POLICIES="current bucketed bucketed_vouchers" \
       sim/tests/bootstrap_eclipse/run_experiment.sh                        # §8.5
     ATTACKER_MODE=coordinated ... run_experiment.sh                        # §8.6-8.8
+    sim/tests/bootstrap_eclipse/run_followups.sh                           # §8.9-8.12
 
 Unit checks: `tests/test_two_nodes.py` (24, real EquiX, default policy)
-and `tests/test_bucketed.py` (25, both policies, no network).
+and `tests/test_bucketed.py` (31, both policies, vouchers and the tried
+table, no network).
 
 ---
 
@@ -710,10 +835,14 @@ and `tests/test_bucketed.py` (25, both policies, no network).
 | 5 | Bucketing retains honest transpeers at every attacker size tested | measured | §8.4, §8.7 |
 | 6 | Neither policy helps at `S >= 2H` | measured | §8.4, §8.7 spread cells |
 | 7 | Voucher counting caps attacker peer entries at 50 per prefix | measured | §8.5 |
-| 8 | Under vouchers a coordinated attacker is absent from the daemon's top 20 at `S <= 3` and enters at `S = 4` | measured, one seed | §8.8 |
-| 9 | Crossover equals observed depth of the honest peers at the bottom of the top 20 | measured, one layout | §8.7, §8.8 depth columns |
-| 10 | Depth scales with honest transpeers on the network | extrapolated | §9.2 |
-| 11 | Depth grows with victim uptime | extrapolated | §9.2 |
+| 8 | Under vouchers a coordinated attacker is absent from the daemon's top 20 at `S = 3` (mean 2 %) and enters at `S = 4` (mean 26 %, five of five seeds), majority from `S = 5` | measured, five seeds | §8.9 |
+| 9 | Crossover equals observed depth of the honest peers at the bottom of the top 20 | measured, one layout per H | §8.8, §8.10, §8.11 depth columns |
+| 10 | Crossover scales about linearly with honest transpeers on the network (4 to 6 at 26; 24 to 32 at about 120) | measured, one seed per H | §8.11 |
+| 11 | Attacker excluded at `S = 4` from minute 25; observed honest depth saturates at list depth by minute 50 | measured, one seed | §8.10 |
+| 15 | Victim's query budget throttles observed attacker depth as much as honest depth | measured, one seed | §8.11 |
+| 16 | Tried table restores honest retention under the current policy (40 to 49 of 50) and is redundant under bucketing | measured, one seed | §8.12 |
+| 17 | An established node under the current policy loses fewer honest transpeers to a flood than a fresh one (10 vs 18 to 28) | measured, one seed | §8.12 vs §8.4, §8.7 |
+| 18 | Crossover near 200 prefixes at 1000 honest transpeers | extrapolated | §9.2 |
 | 12 | Query share under bucketing lags the store formula early and converges | hypothesis | §8.4 query table; not rerun longer |
 | 13 | Verification would remove unreachable fakes within minutes | hypothesis | not simulated |
 | 14 | ASN bucketing raises attack cost without changing the bound | hypothesis | not implemented |
@@ -729,3 +858,10 @@ and `tests/test_bucketed.py` (25, both policies, no network).
 - The runner's memory guard first projected 40 MB per host from the
   previous machine; §8.1 measured 33 to 52. The 5000-host baseline was
   aborted by the guard and has not been rerun.
+- §7 first stated the fresh node completes three query cycles in the
+  15-minute window. It issues two; the third begins at the stop time.
+  Corrected with §8.9.
+- §8.8 attributed run-to-run variance to unseeded node randomness. Shadow
+  seeds all host randomness from its config; the variance came from host
+  counts differing between cells. Corrected with §8.9, which varies the
+  Shadow seed explicitly.

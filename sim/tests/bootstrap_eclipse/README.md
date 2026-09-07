@@ -60,7 +60,8 @@ records the actual value in results.
 - A attacker transpeers, start at t=3s, each serving fake peers for a random
   network and self-announcing to every honest transpeer every 60s
 - 20 min simulated; the fresh node runs for the final 15, which gives it
-  three 300-second query cycles of 20 transpeers each
+  two completed 300-second query batches of 20 transpeers (a third begins
+  at the stop time)
 
 Scenario grid:
 
@@ -346,12 +347,44 @@ attackers. Pinning the crossover tighter than "four" needs several seeds
 per cell, or a longer fresh window so observed depth converges to list
 depth.
 
-## Follow-ups
+## Follow-up experiments (`run_followups.sh`)
 
-1. 200 honest transpeers, to confirm depth scales with honest count. Needs
-   a wider scan range or a lower attacker bucket ceiling, since 200 honest
-   buckets plus attackers exceed the 256 /24s in a /16.
-3. Depth versus uptime: fresh node started at 300 s but measured at 40
-   simulated minutes, to see how fast observed depth approaches list depth.
-4. A protected "tried" table, so that even a subnet-rich attacker cannot
-   displace transpeers that have answered over several cycles.
+Full tables and analysis are in `docs/manuscript.md` §8.9 to §8.12; this
+is the summary. All coordinated, bucketed with vouchers unless the policy
+is the variable, 500 attackers unless stated.
+
+- **Crossover replicas** (`results_crossover_seeds.txt`), five seeds per
+  cell, each seeding the generator and Shadow. Top-20 attacker share, mean
+  over seeds: 2 % at 3 prefixes, 26 % at 4, 61 % at 5, 76 % at 6, 88 % at
+  8. Store share matched the closed form to within half a point on every
+  seed. Entry at four prefixes in five of five replicas.
+- **Depth against uptime** (`results_uptime_*.txt`). At 4 prefixes the
+  attacker peaks at 15 of 20 slots in minute 10 and is gone from minute
+  25. At 6 it holds 6 slots from minute 40 on. Observed honest depth
+  reaches its list-depth ceiling of 23 by minute 50. The bootstrap window
+  is minutes 10 to 25.
+- **200 honest** (`results_h200_*.txt`), about 120 on the primary network.
+  At a 60-minute window the crossover is between 24 and 32 prefixes,
+  against 4 to 6 at 50 honest: a 5.6-fold rise for 4.6-fold more honest
+  transpeers on the network. The victim's query budget throttles observed
+  attacker depth as much as honest depth.
+- **Tried table, late attackers** (`results_tried_late.txt`), 1500
+  attackers arriving at 1500 s against a node up since 300 s. Under the
+  current policy the node retained 40 of 50 honest transpeers without the
+  table and 49 with it. Under bucketing it retained 50 either way; the
+  table is redundant there. It does not act on peer ranking.
+
+Correction recorded here as well as in the manuscript: the 15-minute
+window gives the fresh node two query batches, not three; the third begins
+at the stop time.
+
+## Remaining follow-ups
+
+1. Replicas for the uptime, 200-honest and tried-table runs.
+2. Honest counts beyond 200, to test whether the crossover keeps scaling.
+   Needs a /15 scan range or a lower attacker bucket ceiling.
+3. Query batch size and interval as defense parameters; they set how fast
+   both honest and attacker depth are observed.
+4. Tie-breaking at equal voucher depth; fakes tie honest peers exactly at S.
+5. Rerun the 25-subnet column at 40 simulated minutes to confirm query
+   share converges to the store formula.

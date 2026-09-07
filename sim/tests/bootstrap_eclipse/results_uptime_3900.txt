@@ -1,0 +1,9 @@
+# Transpeer bootstrap_eclipse experiment
+# Honest: 50, fresh node starts at 300s, simulated time: 3900s, seed: 42
+# Attacker mode: coordinated, attacker start: 3s, seeds: 1
+# Machine: 64 threads, 251 GB RAM, parallelism: 60
+# Started: Mon 07 Sep 2026 02:39:58 PM UTC
+
+scenario,attackers,attacker_subnets,policy,seed,real_time_sec,run_mem_mb,store_total,store_attacker_pct,honest_known,buckets,queries_total,query_attacker_pct,peers_total,peer_attacker_pct,multi_voucher_pct,daemon_attacker_pct,top20_honest_max_vouchers,top20_attacker_min_vouchers,tried_total,tried_honest,snapshots,status
+A500_S4_bucketed_vouchers_coord_s1,500,4,bucketed_vouchers,1,781,13261,63,19.0,50,55,220,10.5,829,12.1,44.1,0.0,23,0,0,0,59,ok
+A500_S6_bucketed_vouchers_coord_s1,500,6,bucketed_vouchers,1,826,13099,69,26.1,50,57,220,13.2,814,12.3,44.1,30.0,23,6,0,0,59,ok
