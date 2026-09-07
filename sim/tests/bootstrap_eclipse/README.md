@@ -313,11 +313,42 @@ its first honest query fill the first 20 slots before any attacker is
 queried. Whatever the daemon takes past that is drawn from a store that is
 16 to 48 percent attacker entries with no ranking at all.
 
+## Crossover fill (`results_crossover.txt`)
+
+500 attackers (1500 cannot fit in fewer than six /24s, and the voucher
+count per fake depends only on the subnet count), subnets 3 through 8,
+`bucketed_vouchers`, coordinated.
+
+| attacker subnets | top-20 attacker share | deepest honest | shallowest attacker |
+|-----------------:|:---------------------:|:--------------:|:-------------------:|
+| 3 | **0 %** | 6  | none in top 20 |
+| 4 | 55 %    | 9  | 4 |
+| 5 | 60 %    | 9  | 5 |
+| 6 | 65 %    | 10 | 6 |
+| 7 | 85 %    | 10 | 7 |
+| 8 | 90 %    | 9  | 8 |
+
+**The attacker enters at four subnets and the step is sharp.** Three
+subnets get nothing; four take a majority of the list at once, because
+every fake ties at S vouchers and many of the honest peers in the top 20
+had been observed only three or four times. From there the share climbs
+as fakes overtake progressively deeper honest peers; the handful the fresh
+node had seen nine or ten times survive to eight subnets. The share at a
+given S is, to a first approximation, the fraction of the honest top 20
+whose observed depth is at most S.
+
+**Run-to-run variance is in the fresh node, not the layout.** The honest
+layout is seeded and identical across cells, but the fresh node's scan and
+query order are not, so how many times it happened to hear about a given
+peer varies: the deepest honest entry ranged from 6 to 13 across cells,
+and the six-subnet cell here reads 65 percent against 90 at 1500
+attackers. Pinning the crossover tighter than "four" needs several seeds
+per cell, or a longer fresh window so observed depth converges to list
+depth.
+
 ## Follow-ups
 
-1. Fill subnet counts 3, 4 and 5 at 1500 attackers to pin the crossover to
-   one number.
-2. 200 honest transpeers, to confirm depth scales with honest count. Needs
+1. 200 honest transpeers, to confirm depth scales with honest count. Needs
    a wider scan range or a lower attacker bucket ceiling, since 200 honest
    buckets plus attackers exceed the 256 /24s in a /16.
 3. Depth versus uptime: fresh node started at 300 s but measured at 40
