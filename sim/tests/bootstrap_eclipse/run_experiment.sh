@@ -29,6 +29,8 @@ HONEST="${HONEST:-50}"
 STOP_TIME="${STOP_TIME:-1200}"
 FRESH_START="${FRESH_START:-300}"
 SEED="${SEED:-42}"
+# Space-separated list for replicas; each seeds both the generator and Shadow.
+SEEDS="${SEEDS:-$SEED}"
 ATTACKER_COUNTS="${ATTACKER_COUNTS:-50 150 500 1500}"
 SUBNET_LEVELS="${SUBNET_LEVELS:-concentrated 25 100 spread}"
 POLICIES="${POLICIES:-current bucketed}"
@@ -36,6 +38,9 @@ POLICIES="${POLICIES:-current bucketed}"
 # coordinated: all attackers serve one shared fake set for the fresh
 # node's network, so each fake gets one voucher per attacker subnet.
 ATTACKER_MODE="${ATTACKER_MODE:-independent}"
+# Simulated second at which attackers start. Late attackers (after the
+# fresh node has been up a while) test an established node.
+ATTACKER_START="${ATTACKER_START:-3}"
 
 MIN_FREE_DISK_GB="${MIN_FREE_DISK_GB:-80}"
 MEM_PER_HOST_MB="${MEM_PER_HOST_MB:-40}"
@@ -48,11 +53,11 @@ if [ ! -f "$RESULTS" ]; then
     {
         echo "# Transpeer bootstrap_eclipse experiment"
         echo "# Honest: $HONEST, fresh node starts at ${FRESH_START}s, simulated time: ${STOP_TIME}s, seed: $SEED"
-        echo "# Attacker mode: $ATTACKER_MODE"
+        echo "# Attacker mode: $ATTACKER_MODE, attacker start: ${ATTACKER_START}s, seeds: $SEEDS"
         echo "# Machine: $(nproc) threads, $(free -g | awk '/^Mem:/{print $2}') GB RAM, parallelism: $SIM_PARALLELISM"
         echo "# Started: $(date)"
         echo ""
-        echo "scenario,attackers,attacker_subnets,policy,real_time_sec,run_mem_mb,store_total,store_attacker_pct,honest_known,buckets,queries_total,query_attacker_pct,peers_total,peer_attacker_pct,multi_voucher_pct,daemon_attacker_pct,top20_honest_max_vouchers,top20_attacker_min_vouchers,snapshots,status"
+        echo "scenario,attackers,attacker_subnets,policy,seed,real_time_sec,run_mem_mb,store_total,store_attacker_pct,honest_known,buckets,queries_total,query_attacker_pct,peers_total,peer_attacker_pct,multi_voucher_pct,daemon_attacker_pct,top20_honest_max_vouchers,top20_attacker_min_vouchers,tried_total,tried_honest,snapshots,status"
     } > "$RESULTS"
 fi
 
@@ -61,13 +66,14 @@ avail_mem_mb()  { awk '/^MemAvailable:/{print int($2/1024)}' /proc/meminfo; }
 used_mem_mb()   { awk '/^MemTotal:/{t=$2} /^MemAvailable:/{a=$2} END{print int((t-a)/1024)}' /proc/meminfo; }
 
 run_scenario() {
-    local A="$1" S="$2" POLICY="$3"
+    local A="$1" S="$2" POLICY="$3" RUN_SEED="${4:-$SEED}"
     local NAME="A${A}_S${S}_${POLICY}"
     local MODE_FLAGS=""
     if [ "$ATTACKER_MODE" = "coordinated" ]; then
         NAME="${NAME}_coord"
         MODE_FLAGS="--coordinated"
     fi
+    NAME="${NAME}_s${RUN_SEED}"
     local TOTAL=$((HONEST + 1 + A))
 
     echo ""
@@ -78,14 +84,14 @@ run_scenario() {
     local FREE_GB; FREE_GB=$(free_disk_gb)
     if [ "${FREE_GB:-0}" -lt "$MIN_FREE_DISK_GB" ]; then
         echo "ABORT: only ${FREE_GB}GB free on $DATA_ROOT"
-        echo "$NAME,$A,$S,$POLICY,0,0,0,0.0,0,0,0,0.0,0,0.0,0.0,0.0,0,0,0,aborted_disk" >> "$RESULTS"
+        echo "$NAME,$A,$S,$POLICY,$RUN_SEED,0,0,0,0.0,0,0,0,0.0,0,0.0,0.0,0.0,0,0,0,0,0,aborted_disk" >> "$RESULTS"
         return 1
     fi
     local PROJECTED=$((TOTAL * MEM_PER_HOST_MB))
     local BUDGET=$(( $(avail_mem_mb) * MEM_HEADROOM_PCT / 100 ))
     if [ "$PROJECTED" -gt "$BUDGET" ]; then
         echo "ABORT: projected ${PROJECTED}MB exceeds ${BUDGET}MB budget"
-        echo "$NAME,$A,$S,$POLICY,0,0,0,0.0,0,0,0,0.0,0,0.0,0.0,0.0,0,0,0,aborted_memory" >> "$RESULTS"
+        echo "$NAME,$A,$S,$POLICY,$RUN_SEED,0,0,0,0.0,0,0,0,0.0,0,0.0,0.0,0.0,0,0,0,0,0,aborted_memory" >> "$RESULTS"
         return 1
     fi
 
@@ -98,13 +104,16 @@ run_scenario() {
         current) ;;
         bucketed) POLICY_FLAGS="--bucketed" ;;
         bucketed_vouchers) POLICY_FLAGS="--bucketed --vouchers" ;;
+        current_tried) POLICY_FLAGS="--tried" ;;
+        bucketed_vouchers_tried) POLICY_FLAGS="--bucketed --vouchers --tried" ;;
         *) echo "unknown policy: $POLICY"; return 1 ;;
     esac
 
     local GEN_OUT
     GEN_OUT=$("$TRANSPEER_PYTHON" "$TEST_DIR/gen_config.py" \
         --honest "$HONEST" --attackers "$A" --attacker-subnets "$S" $POLICY_FLAGS $MODE_FLAGS \
-        --stop-time "$STOP_TIME" --fresh-start "$FRESH_START" --seed "$SEED" \
+        --stop-time "$STOP_TIME" --fresh-start "$FRESH_START" --seed "$RUN_SEED" \
+        --attacker-start "$ATTACKER_START" \
         --output "$CONFIG") || { echo "config generation failed"; return 1; }
     echo "$GEN_OUT" | grep -v ECLIPSE_LAYOUT
     local LAYOUT; LAYOUT=$(echo "$GEN_OUT" | grep ECLIPSE_LAYOUT)
@@ -137,7 +146,7 @@ run_scenario() {
         "$DATA_DIR/hosts/fresh/python3.12.1000.stderr" \
         --honest "$HONEST" --fresh-bucket "$FRESH_B" --first-attacker-bucket "$FIRST_ATT")
 
-    echo "$NAME,$A,$S_ACTUAL,$POLICY,$ELAPSED,$RUN_MEM,$METRICS,$STATUS" >> "$RESULTS"
+    echo "$NAME,$A,$S_ACTUAL,$POLICY,$RUN_SEED,$ELAPSED,$RUN_MEM,$METRICS,$STATUS" >> "$RESULTS"
     echo "Done: $NAME elapsed=${ELAPSED}s mem=${RUN_MEM}MB metrics=[$METRICS] $STATUS"
 
     if [ "$KEEP_RAW" != "1" ] && [ "$STATUS" = "ok" ] && [ -d "$DATA_DIR/hosts" ]; then
@@ -160,10 +169,12 @@ for A in $ATTACKER_COUNTS; do
             *) [ "$S" -gt "$A" ] && { echo "skip A=$A S=$S"; continue; } ;;
         esac
         for POLICY in $POLICIES; do
-            run_scenario "$A" "$S" "$POLICY" || {
-                # A resource abort stops the ramp; a failed sim moves on.
-                tail -1 "$RESULTS" | grep -q aborted && exit 1
-            }
+            for RUN_SEED in $SEEDS; do
+                run_scenario "$A" "$S" "$POLICY" "$RUN_SEED" || {
+                    # A resource abort stops the ramp; a failed sim moves on.
+                    tail -1 "$RESULTS" | grep -q aborted && exit 1
+                }
+            done
         done
     done
 done

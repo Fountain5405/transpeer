@@ -61,6 +61,9 @@ class Config:
     # peer's credibility is the number of distinct buckets that reported it
     # (observed, not claimed), and get_peers ranks by it.
     vouchers: bool = False
+    # Tried table: a transpeer that has answered our queries at least twice
+    # is never evicted to make room for a newcomer.
+    tried_table: bool = False
     # Log a STORE_SNAPSHOT line every N seconds (0 = off). Simulation metric.
     snapshot_interval: int = 0
 
@@ -125,6 +128,11 @@ def parse_args() -> Config:
              "peers by the number of distinct buckets that reported them.",
     )
     parser.add_argument(
+        "--tried-table", action="store_true",
+        help="Protect transpeers that have answered queries at least twice "
+             "from eviction by newcomers.",
+    )
+    parser.add_argument(
         "--snapshot-interval", type=int, default=0,
         help="Log store composition every N seconds (simulation metric).",
     )
@@ -145,6 +153,7 @@ def parse_args() -> Config:
         subnet_prefix=args.subnet_prefix,
         bucketed=args.bucketed,
         vouchers=args.vouchers,
+        tried_table=args.tried_table,
         snapshot_interval=args.snapshot_interval,
     )
 

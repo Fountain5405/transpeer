@@ -201,7 +201,7 @@ class TranspeerClient:
         updated = await self.probe_transpeer(entry.addr, entry.port)
         if not updated:
             log.info("Transpeer %s:%d unreachable", entry.addr, entry.port)
-            return
+            return False
         await self.store.add_transpeer(updated)
 
         for network in updated.networks:
@@ -219,3 +219,4 @@ class TranspeerClient:
             await self.store.add_transpeer(tp, gossiped=True)
         if new_transpeers:
             log.info("Got %d transpeers from %s", len(new_transpeers), entry.addr)
+        return True

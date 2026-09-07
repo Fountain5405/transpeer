@@ -77,6 +77,7 @@ class TranspeerEntry:
     last_seen: int = 0
     node_id: str = ""
     last_queried: int = 0  # Timestamp of last successful query (for rotation)
+    answered: int = 0  # Queries this transpeer has answered; feeds the tried table
 
     @property
     def key(self) -> str:
@@ -97,6 +98,7 @@ VERIFY_THRESHOLD = 0.8  # 80% alive to earn a cap increase
 DEAD_PEER_MAX_AGE = 3600  # Prune unverified/dead peers after 1 hour
 DEAD_PEER_COOLDOWN = 1800  # Don't re-accept a dead peer for 30 minutes
 MAX_TRANSPEERS_PER_SUBNET = 3  # Max transpeers accepted from same /16 subnet
+TRIED_THRESHOLD = 2  # Answered queries before an entry counts as tried
 
 
 @dataclass
@@ -474,12 +476,15 @@ class PeerStore:
         the unique fullest, the newcomer is refused instead, so a flood from
         one subnet only ever displaces itself.
         """
+        # Tried entries are off the table unless nothing else is left.
+        pool = {k: t for k, t in self._transpeers.items() if not self.is_tried(t)}
+        if not pool:
+            pool = dict(self._transpeers)
         if not self.config.bucketed:
-            return min(
-                self._transpeers.keys(),
-                key=lambda k: self._transpeers[k].last_seen,
-            )
-        buckets = self._transpeers_by_bucket()
+            return min(pool.keys(), key=lambda k: pool[k].last_seen)
+        buckets: dict[str, list[TranspeerEntry]] = {}
+        for t in pool.values():
+            buckets.setdefault(self._bucket_of(t.addr), []).append(t)
         max_size = max(len(m) for m in buckets.values())
         fullest = [b for b, m in buckets.items()
                    if len(m) == max_size and b != incoming_bucket]
@@ -522,12 +527,20 @@ class PeerStore:
             queues = remaining
         return picked
 
-    def mark_queried(self, addr: str, port: int):
-        """Record that we just queried a transpeer."""
+    def mark_queried(self, addr: str, port: int, answered: bool = False):
+        """Record that we just queried a transpeer, and whether it answered."""
         key = f"{addr}:{port}"
         entry = self._transpeers.get(key)
         if entry:
             entry.last_queried = int(time.time())
+            if answered:
+                entry.answered += 1
+
+    def is_tried(self, entry: TranspeerEntry) -> bool:
+        """Under --tried-table an entry that has answered at least
+        TRIED_THRESHOLD queries is protected from eviction by newcomers.
+        An attacker can only displace what has never proven itself."""
+        return self.config.tried_table and entry.answered >= TRIED_THRESHOLD
 
     def get_transpeers_for_gossip(self, limit: int,
                                   exclude_addr: str = "") -> list[TranspeerEntry]:
@@ -600,6 +613,8 @@ class PeerStore:
             "peer_sources": by_source,
             "voucher_hist": hist,
             "daemon_view": daemon_view,
+            "tried_addrs": sorted(t.addr for t in self._transpeers.values()
+                                  if self.is_tried(t)),
         }
 
     async def _save_transpeer(self, entry: TranspeerEntry):

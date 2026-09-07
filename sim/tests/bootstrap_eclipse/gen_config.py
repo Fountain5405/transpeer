@@ -93,7 +93,7 @@ GRAPH = """graph [
 
 def gen(num_honest, num_attackers, attacker_subnets, bucketed, stop_time,
         fresh_start, snapshot_interval, fake_peers, difficulty, seed,
-        vouchers=False, coordinated=False):
+        vouchers=False, coordinated=False, tried=False, attacker_start=3):
     random.seed(seed)
     S = resolve_subnets(num_attackers, attacker_subnets)
     if num_honest + 1 + S > 256:
@@ -103,6 +103,9 @@ def gen(num_honest, num_attackers, attacker_subnets, bucketed, stop_time,
     config = {
         "general": {
             "stop_time": f"{stop_time}s",
+            # Shadow derives every host's randomness from this, so two runs
+            # of one config are identical. Replicas vary it with --seed.
+            "seed": seed,
             "model_unblocked_syscall_latency": True,
             "parallelism": min(SIM_PARALLELISM,
                                max(4, num_honest + 1 + num_attackers)),
@@ -116,6 +119,8 @@ def gen(num_honest, num_attackers, attacker_subnets, bucketed, stop_time,
         policy_flags += " --bucketed"
     if vouchers:
         policy_flags += " --vouchers"
+    if tried:
+        policy_flags += " --tried-table"
 
     def transpeer_process(args, start):
         return {
@@ -213,7 +218,7 @@ def gen(num_honest, num_attackers, attacker_subnets, bucketed, stop_time,
                 f"--announce-interval {ANNOUNCE_INTERVAL}")
         if coordinated:
             args += " --fake-seed 1"
-        host(f"attacker{j+1}", ip, transpeer_process(args, 3))
+        host(f"attacker{j+1}", ip, transpeer_process(args, attacker_start))
 
     return config, S, first_attacker_bucket
 
@@ -232,6 +237,11 @@ def main():
     ap.add_argument("--coordinated", action="store_true",
                     help="all attackers target the fresh node's network and "
                          "serve one shared fake set")
+    ap.add_argument("--tried", action="store_true",
+                    help="run all transpeer nodes with --tried-table")
+    ap.add_argument("--attacker-start", type=int, default=3,
+                    help="simulated second at which attackers start (late "
+                         "attackers test an established node)")
     ap.add_argument("--stop-time", type=int, default=900)
     ap.add_argument("--fresh-start", type=int, default=300)
     ap.add_argument("--snapshot-interval", type=int, default=60)
@@ -244,7 +254,8 @@ def main():
     config, S, first_attacker_bucket = gen(
         a.honest, a.attackers, a.attacker_subnets, a.bucketed, a.stop_time,
         a.fresh_start, a.snapshot_interval, a.fake_peers, a.difficulty, a.seed,
-        vouchers=a.vouchers, coordinated=a.coordinated)
+        vouchers=a.vouchers, coordinated=a.coordinated,
+        tried=a.tried, attacker_start=a.attacker_start)
 
     with open(a.output, "w") as f:
         yaml.dump(config, f, default_flow_style=False, sort_keys=False)
@@ -256,6 +267,8 @@ def main():
     policy = 'bucketed' if a.bucketed else 'current'
     if a.vouchers:
         policy += '+vouchers'
+    if a.tried:
+        policy += '+tried'
     print(f"  policy={policy} attackers={'coordinated' if a.coordinated else 'independent'}")
     # Machine-readable line for the runner.
     print(f"ECLIPSE_LAYOUT honest={a.honest} attackers={a.attackers} "

@@ -9,7 +9,8 @@ Prints one CSV fragment on stdout:
   store_total,store_attacker_pct,honest_known,buckets,
   queries_total,query_attacker_pct,peers_total,peer_attacker_pct,
   multi_voucher_pct,daemon_attacker_pct,
-  top20_honest_max_vouchers,top20_attacker_min_vouchers,snapshots
+  top20_honest_max_vouchers,top20_attacker_min_vouchers,
+  tried_total,tried_honest,snapshots
 
 multi_voucher_pct: share of peer entries reported by two or more distinct
 buckets. daemon_attacker_pct: share of the top-20 peers per network, in the
@@ -26,7 +27,8 @@ import sys
 SNAP_RE = re.compile(
     r"STORE_SNAPSHOT transpeers=(\d+) buckets=(\d+) peers=(\d+) "
     r"transpeer_addrs=(\S*) peer_sources=(\S*)"
-    r"(?: voucher_hist=(\S*) daemon_view=(\S*))?")
+    r"(?: voucher_hist=(\S*) daemon_view=(\S*))?"
+    r"(?: tried_addrs=(\S*))?")
 QUERY_RE = re.compile(r"Querying transpeer (\d+\.\d+\.\d+\.\d+):\d+")
 
 
@@ -73,13 +75,14 @@ def main():
                     snapshots += 1
                     last_snap = m
     except FileNotFoundError:
-        print("0,0.0,0,0,0,0.0,0,0.0,0.0,0.0,0,0,0")
+        print("0,0.0,0,0,0,0.0,0,0.0,0.0,0.0,0,0,0,0,0")
         sys.exit(0)
 
     store_total = store_attacker = honest_known = buckets = 0
     peers_total = peers_attacker = 0
     multi = hist_total = dv_total = dv_attacker = 0
     hon_max, att_min = 0, None
+    tried_total = tried_honest = 0
     if last_snap:
         store_total = int(last_snap.group(1))
         buckets = int(last_snap.group(2))
@@ -116,6 +119,13 @@ def main():
                         att_min = d if att_min is None else min(att_min, d)
                     else:
                         hon_max = max(hon_max, d)
+        if last_snap.group(8):
+            for ip in last_snap.group(8).split(","):
+                if not ip:
+                    continue
+                tried_total += 1
+                if cls(ip) == "honest":
+                    tried_honest += 1
 
     q_total = sum(queries.values())
     print(",".join([
@@ -124,6 +134,7 @@ def main():
         str(peers_total), pct(peers_attacker, peers_total),
         pct(multi, hist_total), pct(dv_attacker, dv_total),
         str(hon_max), str(att_min or 0),
+        str(tried_total), str(tried_honest),
         str(snapshots),
     ]))
 

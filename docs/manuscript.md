@@ -103,36 +103,143 @@ only under a policy that measures the latter.
 
 ---
 
-## 3. The transpeer/1 protocol, as relevant here
+## 3. The transpeer/1 protocol
 
-From `PROTOCOL.md`. HTTP/1.1 with JSON on TCP port 7337, IPv4 only.
+Specification in `PROTOCOL.md`; reference implementation in `transpeer/`.
+Constants below are from `transpeer/config.py` and `transpeer/peerstore.py`
+at commit `23d54d9` unless stated.
 
-Three endpoints. `GET /transpeer` is the free discovery handshake and
-returns the node's identifier, networks and current handshake difficulty.
-`GET /peers/{network}` returns verified peer entries for one network, each
-carrying an EquiX proof over `(network, addr, port, timestamp_bucket)`
-with a 6-hour bucket and 12-hour validity. `GET /transpeers` returns a
-sample of known transpeers for transitive discovery.
+### 3.1 Design goal
 
-Three discovery paths feed a node's transpeer store:
+A node that runs one or more peer-to-peer daemons (Monero, Wownero, Aeon,
+or any network with a plugin) also runs a *transpeer*: a small HTTP
+service that publishes the daemon's live peers and collects other
+transpeers' publications. Any node that finds one transpeer, by any means,
+can then obtain bootstrap peers for every participating network. The
+intent is that a brute-force scan of IPv4 space, which is hopeless for one
+network alone, becomes practical when every participating network's
+transpeers are all valid hits.
 
-- **Scan**: random non-reserved IPv4 addresses probed on port 7337.
-- **Candidate** ("implicit self-announcement"): any address that sends a
-  request is recorded and later probed; if it answers `/transpeer` it is
-  admitted.
-- **Gossip**: entries returned by another transpeer's `/transpeers`.
+### 3.2 Transport and identity
 
-Peer entries carry a `sources` field, the number of transpeers that
-reported the entry *according to the sender*. Only locally verified peers
-are served; verification is a TCP probe of the peer's daemon port with a
-protocol handshake for networks the node runs.
+- TCP port 7337, HTTP/1.1, JSON bodies. IPv4 only; the specification
+  cites IPv4 scarcity as the Sybil cost (revisited in §9).
+- A transpeer's identity is its IPv4 address. A random `node_id` is
+  generated per process start and serves only to let a scanner recognise
+  itself and to bind handshake puzzles; it carries no trust.
+- Per-source rate limit of 60 requests per 60 seconds, answered with 429.
 
-Existing defenses at the start of this study, all in `peerstore.py`: a
-per-source acceptance cap of 50 peer entries that grows with the source's
-verification success rate, a limit of 3 transpeers per `/16` on gossiped
-entries, a dead-peer cooldown, per-network peer caps, a store cap of 500
-transpeers with oldest-seen eviction, a gossip sample of 50, and adaptive
-handshake proof-of-work (§6.3).
+### 3.3 Endpoints
+
+**`GET /transpeer`** — discovery handshake, always free of proof-of-work.
+Returns `protocol` (`"transpeer/1"`), `node_id`, `networks` served,
+`peer_counts` per network, `uptime`, the entry-proof `difficulty` the
+node requires, and the current `handshake_effort`. Any request to this
+endpoint records the requester as a *candidate* transpeer (§3.5).
+
+**`GET /peers/{network}`** — verified peer entries for one network. Each
+entry is `{addr, port, last_seen, sources, proof}` where `proof` is
+`{nonce, effort, solution, timestamp_bucket}` (§3.4). `sources` is the
+number of transpeers the *sender* says reported the entry. Requires a
+valid handshake proof when the node's load tracker has raised
+`handshake_effort` above zero (§6.3).
+
+**`GET /transpeers`** — a sample of up to 50 known transpeers,
+`{addr, port, networks, last_seen}`, weighted toward recently seen ones
+and excluding the requester. Same handshake requirement.
+
+### 3.4 Entry proof-of-work
+
+Every published peer entry carries an EquiX proof. The challenge binds the
+entry to a six-hour window:
+
+    timestamp_bucket = unix_time // 21600
+    challenge = blake2b(network ":" addr ":" port ":" timestamp_bucket, 32 bytes)
+
+The solver draws a 16-byte nonce (8-byte counter, 8 random bytes), runs
+`equix_solve(challenge || nonce)`, and accepts a solution when
+`blake2b(challenge || nonce || solution, 4 bytes)` as a little-endian
+integer times `effort` does not exceed 2^32 − 1, incrementing the counter
+otherwise. Verification reconstructs the challenge, checks the bucket is
+current or previous (12-hour validity), calls `equix_verify`, and rechecks
+the difficulty product. The specification quotes verification at about
+50 µs; solving scales with `effort`. Default `effort` is 100. The
+simulations replace solving with a sleep of the estimated duration.
+
+Because the proof binds `(network, addr, port)`, a valid entry can be
+relayed by any transpeer without re-solving, and a forged entry costs a
+solve per fake. The proof does not bind the *publisher*, which is why it
+limits spam but not identity (§9.4).
+
+### 3.5 Discovery paths
+
+Three paths feed a node's transpeer store; the distinction matters in §5.
+
+- **Scan.** Random non-reserved IPv4 addresses (RFC 1918, loopback,
+  link-local, multicast and documentation ranges skipped), 500 concurrent
+  probes per 10-second batch with a 2-second timeout. A port-7337 TCP
+  connect followed by `GET /transpeer` with the right `protocol` string
+  is a transpeer. A `--scan-range` CIDR restricts the space; simulations
+  use it.
+- **Candidate** ("implicit self-announcement"). Every address that
+  contacts `/transpeer` is queued; every 30 seconds the queue is probed
+  and responders are admitted. Connecting to the overlay is registering
+  with it.
+- **Gossip.** Entries from `/transpeers` responses, admitted with the
+  `gossiped` flag.
+
+### 3.6 Node loops
+
+The node runs six concurrent loops. *Extract* (every 60 s) reads the
+local daemons' peer lists via each network plugin, solves an entry proof
+per peer, and stores them as verified. *Scan* (every 10 s) runs one batch.
+*Query* (every 300 s) selects 20 known transpeers, oldest-queried first,
+and for each fetches `/transpeer`, `/peers/{network}` for every network
+it serves, and `/transpeers`, merging the results. *Verify* (every 300 s)
+probes stored peers. *Prune* (hourly) drops stale entries. *Candidate*
+(every 30 s) probes the self-announcement queue.
+
+### 3.7 Peer lifecycle and verification
+
+Received → proof verified → probed → verified → re-probed → pruned. A
+probe is a TCP connection to the peer's daemon port, with a
+protocol-level handshake (magic bytes) for networks the node runs and a
+bare port check otherwise. Only verified peers are served on
+`/peers/{network}`; a never-verified peer that fails a probe is removed
+and placed on a 30-minute cooldown, a previously verified one loses a
+source count and its verified flag. Peers unseen for seven days and
+transpeers uncontacted for three are pruned.
+
+### 3.8 Defense layers present at the start of the study
+
+| layer | rule | constant |
+|-------|------|----------|
+| per-source acceptance cap | new entries accepted from one transpeer | 50, +50 per 10 verifications at ≥ 80 % alive, reset below |
+| subnet limit | transpeers per `/16`, gossiped entries only | 3 |
+| store cap | transpeers kept, oldest-seen evicted when full | 500 |
+| gossip sample | transpeers returned per `/transpeers` | 50 |
+| query batch | transpeers queried per cycle | 20 |
+| per-network peer cap | peer entries stored per network | 2000 |
+| dead cooldown | before a failed never-verified peer is re-accepted | 1800 s |
+| rate limit | requests per source | 60 / 60 s |
+| entry proof | EquiX effort per published peer | 100 |
+| handshake proof | adaptive EquiX effort on query endpoints | 0 dormant, up to 1000 |
+
+### 3.9 Network plugins
+
+A plugin names the network, its default P2P and RPC ports, how to extract
+the daemon's peer list (Monero-family RPC by default; a bash script
+dumping any daemon's list is the stated portability path), and how to
+handshake with a peer for verification. Shipped plugins: `monero`
+(18080/18081), `wownero` (34567/34568), `aeon` (11180/11181), and a
+`generic` port-only plugin. Simulations use ten synthetic networks
+`p2pa`..`p2pj` on ports 10000 onward via `--static-peers`.
+
+### 3.10 Security assumptions as stated by the specification
+
+Sybil resistance from IPv4 scarcity; spam resistance from entry
+proof-of-work; no trust required because every node verifies
+independently; automatic pruning. §5 and §9 examine the first of these.
 
 ---
 
@@ -226,7 +333,19 @@ with aggregate request volume and decays when load subsides, valid for a
 one-hour bucket per client. Measured in §8.2. It addresses request floods,
 not Sybil identity, and is present in every experiment below.
 
-### 6.4 A fix found along the way
+### 6.4 Protected tried table (`--tried-table`)
+
+A transpeer that has answered this node's queries at least twice is
+*tried*. Tried entries are excluded from eviction while any untried entry
+exists; if every entry is tried, eviction falls back to the policy's
+normal rule. Admission caps still apply to tried buckets, so the table
+cannot be used to hold more than the cap. The threshold of two answers is
+one more than a single successful probe, so an attacker cannot become
+tried merely by being scanned. The table is meant for the established
+node under a later flood; the bootstrap window, where nothing is tried
+yet, is unaffected by design.
+
+### 6.5 A fix found along the way
 
 The peer-extraction loop re-solved EquiX for every locally published peer
 every 60 seconds; proofs are valid for a 6-hour bucket. Commit `82070b2`

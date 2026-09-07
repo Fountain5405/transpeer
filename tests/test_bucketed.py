@@ -239,6 +239,81 @@ async def test_vouchers():
           "snapshot reports the voucher histogram and the daemon's view in rank order")
 
 
+async def test_tried_table():
+    print("\n=== Tried table ===")
+    import transpeer.peerstore as ps
+    from transpeer.peerstore import TRIED_THRESHOLD
+
+    def tstore(bucketed):
+        return PeerStore(Config(in_memory=True, bucketed=bucketed,
+                                tried_table=True, subnet_prefix=24))
+
+    saved = ps.MAX_TRANSPEERS_TRACKED
+    try:
+        # Current-policy eviction with a tried entry that is also the oldest.
+        s = tstore(bucketed=False)
+        await s.add_transpeer(entry("11.0.0.1", seen=1))
+        for _ in range(TRIED_THRESHOLD):
+            s.mark_queried("11.0.0.1", 7337, answered=True)
+        await s.add_transpeer(entry("11.0.9.1", seen=1000))
+        s.mark_queried("11.0.9.1", 7337, answered=False)
+        await s.add_transpeer(entry("11.0.9.2", seen=1000))
+        ps.MAX_TRANSPEERS_TRACKED = 3
+        await s.add_transpeer(entry("11.0.9.3", seen=5000))
+        keys = {t.key for t in s.get_transpeers()}
+        check("11.0.0.1:7337" in keys and "11.0.9.1:7337" not in keys,
+              "tried entry survives eviction; an unanswered newer entry goes instead")
+
+        # Answering once is not enough.
+        s = tstore(bucketed=False)
+        await s.add_transpeer(entry("11.0.0.1", seen=1))
+        s.mark_queried("11.0.0.1", 7337, answered=True)
+        await s.add_transpeer(entry("11.0.9.1", seen=1000))
+        await s.add_transpeer(entry("11.0.9.2", seen=1000))
+        await s.add_transpeer(entry("11.0.9.3", seen=5000))
+        keys = {t.key for t in s.get_transpeers()}
+        check("11.0.0.1:7337" not in keys, f"fewer than {TRIED_THRESHOLD} answers is not tried")
+
+        # When everything is tried, eviction falls back to the normal rule.
+        s = tstore(bucketed=False)
+        for ip, seen in (("11.0.0.1", 1), ("11.0.9.1", 1000), ("11.0.9.2", 1000)):
+            await s.add_transpeer(entry(ip, seen=seen))
+            for _ in range(TRIED_THRESHOLD):
+                s.mark_queried(ip, 7337, answered=True)
+        added = await s.add_transpeer(entry("11.0.9.3", seen=5000))
+        check(added and "11.0.0.1:7337" not in {t.key for t in s.get_transpeers()},
+              "all-tried store falls back to evicting the oldest")
+
+        # Bucketed: tried entries are excluded from the fullest-bucket pool.
+        s = tstore(bucketed=True)
+        await s.add_transpeer(entry("11.0.9.1", seen=1))
+        await s.add_transpeer(entry("11.0.9.2", seen=1))
+        for _ in range(TRIED_THRESHOLD):
+            s.mark_queried("11.0.9.1", 7337, answered=True)
+            s.mark_queried("11.0.9.2", 7337, answered=True)
+        await s.add_transpeer(entry("11.0.8.1", seen=1000))
+        await s.add_transpeer(entry("11.0.7.1", seen=5000))
+        keys = {t.key for t in s.get_transpeers()}
+        check("11.0.9.1:7337" in keys and "11.0.9.2:7337" in keys and "11.0.8.1:7337" not in keys,
+              "bucketed eviction skips a tried bucket and takes the untried entry")
+
+        snap = s.snapshot()
+        check(snap["tried_addrs"] == ["11.0.9.1", "11.0.9.2"], "snapshot lists tried entries")
+
+        # Flag off: answered counts accumulate but nothing is protected.
+        s = store(bucketed=False)
+        await s.add_transpeer(entry("11.0.0.1", seen=1))
+        for _ in range(TRIED_THRESHOLD):
+            s.mark_queried("11.0.0.1", 7337, answered=True)
+        await s.add_transpeer(entry("11.0.9.1", seen=1000))
+        await s.add_transpeer(entry("11.0.9.2", seen=1000))
+        await s.add_transpeer(entry("11.0.9.3", seen=5000))
+        check("11.0.0.1:7337" not in {t.key for t in s.get_transpeers()},
+              "without --tried-table the oldest entry is evicted as before")
+    finally:
+        ps.MAX_TRANSPEERS_TRACKED = saved
+
+
 async def main():
     await test_admission()
     await test_eviction()
@@ -246,6 +321,7 @@ async def main():
     await test_gossip_selection()
     await test_snapshot()
     await test_vouchers()
+    await test_tried_table()
     print(f"\nResults: {passed} passed, {failed} failed")
     sys.exit(1 if failed else 0)
 
