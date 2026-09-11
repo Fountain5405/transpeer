@@ -24,3 +24,6 @@ sim/tests/**/*.log
 sim/shadow_scale_*.yaml
 sim/shadow_attacker.yaml
 sim/shadow_crossnet.yaml
+
+# Session notes for agents (contain machine-local paths)
+.claude/
