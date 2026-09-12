@@ -173,31 +173,74 @@ limits spam but not identity (§9.4).
 
 ### 3.5 Discovery paths
 
-Three paths feed a node's transpeer store; the distinction matters in §5.
+Four paths feed a node's transpeer store; the distinction matters in §5.
 
-- **Scan.** Random non-reserved IPv4 addresses (RFC 1918, loopback,
-  link-local, multicast and documentation ranges skipped), 500 concurrent
-  probes per 10-second batch with a 2-second timeout. A port-7337 TCP
-  connect followed by `GET /transpeer` with the right `protocol` string
-  is a transpeer. A `--scan-range` CIDR restricts the space; simulations
-  use it.
+- **Scan.** Random IPv4 addresses, skipping reserved ranges (RFC 1918,
+  loopback, link-local, multicast, documentation) and, since the
+  etiquette revision (§3.7), a built-in list of sensitively monitored
+  netblocks and any operator-listed prefix. A port-7337 TCP connect
+  followed by `GET /transpeer` with the right `protocol` string is a
+  transpeer. A `--scan-range` CIDR restricts the space; simulations use
+  it, together with `--scan-legacy` (500 concurrent probes per 10-second
+  batch, 2-second timeout, no backoff), the profile every experiment in
+  §8 ran under.
 - **Candidate** ("implicit self-announcement"). Every address that
   contacts `/transpeer` is queued; every 30 seconds the queue is probed
   and responders are admitted. Connecting to the overlay is registering
   with it.
 - **Gossip.** Entries from `/transpeers` responses, admitted with the
   `gossiped` flag.
+- **Daemon peers.** Every peer the local daemon is connected to is queued
+  for a transpeer-port probe, at most once per six hours per address
+  (etiquette revision; off under `--scan-legacy`). A host already in a
+  P2P relationship with us may run a transpeer beside its daemon, and
+  probing it is not blind scanning. This is the path a node that has
+  stopped scanning keeps discovering through.
 
 ### 3.6 Node loops
 
 The node runs six concurrent loops. *Extract* (every 60 s) reads the
 local daemons' peer lists via each network plugin, solves an entry proof
-per peer, and stores them as verified. *Scan* (every 10 s) runs one batch.
+per peer, and stores them as verified. *Scan* (every 10 s) runs one batch,
+fired at once under the legacy profile and spread across the interval
+under the production profile (§3.7).
 *Query* (every 300 s) selects 20 known transpeers, oldest-queried first,
 and for each fetches `/transpeer`, `/peers/{network}` for every network
 it serves, and `/transpeers`, merging the results. *Verify* (every 300 s)
 probes stored peers. *Prune* (hourly) drops stale entries. *Candidate*
 (every 30 s) probes the self-announcement queue.
+
+### 3.7 Scanning etiquette
+
+Blind scanning is the behaviour that gets an address reported to abuse
+databases, listed by community blocklists and cut off under hosting
+providers' acceptable-use policies, and the original profile (50
+unsolicited connects per second per node, indefinitely) would have earned
+that. The shot in the dark is for a node that knows nobody, so the
+production profile treats scanning as a bootstrap mechanism only:
+
+- **Cold only.** A node scans at `--scan-rate` (default 4 per second,
+  probes spread across the interval with jitter) until
+  `--scan-target-known` transpeers (default 3) have answered a query,
+  then stops. If the live count later falls below the target, scanning
+  resumes. Discovery continues through gossip, candidates and daemon
+  peers.
+- **Exclusions.** Reserved ranges and the US DoD `/8`s are never
+  blind-scanned; `--scan-exclude` adds an operator file. An explicit
+  `--scan-range` is not filtered.
+- **Identification.** Every request carries a User-Agent naming the
+  protocol, the project URL and the operator's opt-out contact; `GET /`
+  on the transpeer port explains the probe to whoever looks up the
+  address that touched them.
+- **No-scan mode.** `--no-scan` for residential lines and strict hosts.
+
+Stopping the scan after first contact has a security cost that the
+experiments in §8 did not measure: the first transpeer a cold node finds
+becomes, until gossip and daemon peers widen the view, its only source of
+further transpeers. Bucketing caps what one gossip source can fill and
+the daemon-peer path is outside the attacker's control, but the window
+between first contact and a diversified store is a target for a
+first-contact eclipse and is listed in §11.
 
 ### 3.7 Peer lifecycle and verification
 
@@ -813,6 +856,15 @@ of addresses by construction.
 
 ## 11. Future work
 
+0. Two defenses against a colluding reporter majority are implemented and
+   under measurement (`run_defenses.sh`): a hand-off reserve
+   (`--handoff-reserve K`, the last K daemon slots go to peers vouched by
+   reporter buckets absent from the ranked head, gated on two vouchers)
+   and native vouchers (`--native-vouchers`, reports from transpeers
+   whose host answers on the network's daemon port rank first). Results
+   will be §8.13 and §8.14. Then: bootstrap latency under the etiquette
+   scan profile of §3.7 (every run so far used `--scan-legacy`), and the
+   first-contact eclipse window that profile opens.
 1. Honest counts beyond 200, to test whether the crossover keeps scaling
    linearly. Needs a `/15` scan range or a smaller attacker bucket
    ceiling, since 200 honest buckets plus attackers already fill most of

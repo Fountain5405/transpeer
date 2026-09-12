@@ -27,6 +27,10 @@ class Peer:
     # Buckets of the transpeers that reported this peer, as observed by us.
     # Only maintained under --vouchers; never sent on the wire.
     vouchers: set = field(default_factory=set)
+    # Subset of `vouchers` whose transpeer verifiably runs this peer's
+    # network (its host answered on the network's P2P port). Only
+    # maintained under --native-vouchers.
+    native_vouchers: set = field(default_factory=set)
     # PoW proof
     nonce: bytes = b""
     effort: int = 0
@@ -78,6 +82,10 @@ class TranspeerEntry:
     node_id: str = ""
     last_queried: int = 0  # Timestamp of last successful query (for rotation)
     answered: int = 0  # Queries this transpeer has answered; feeds the tried table
+    alive: bool = False  # Did the most recent query get an answer?
+    # network -> True/False: did this transpeer's host answer on that
+    # network's P2P port? Filled by the native probe under --native-vouchers.
+    native: dict = field(default_factory=dict)
 
     @property
     def key(self) -> str:
@@ -99,6 +107,11 @@ DEAD_PEER_MAX_AGE = 3600  # Prune unverified/dead peers after 1 hour
 DEAD_PEER_COOLDOWN = 1800  # Don't re-accept a dead peer for 30 minutes
 MAX_TRANSPEERS_PER_SUBNET = 3  # Max transpeers accepted from same /16 subnet
 TRIED_THRESHOLD = 2  # Answered queries before an entry counts as tried
+# A hand-off reserve pick must carry at least this many vouchers. Without a
+# floor, an attacker with K prefixes could split them into K one-bucket
+# clusters and buy K reserve slots it would never earn by rank; with it,
+# each reserve slot costs the attacker this many prefixes.
+RESERVE_MIN_VOUCHERS = 2
 
 
 @dataclass
@@ -247,6 +260,8 @@ class PeerStore:
                 if self.config.vouchers:
                     if source_addr:
                         existing.vouchers.add(self._bucket_of(source_addr))
+                        if self._source_is_native(source_addr, peer.network):
+                            existing.native_vouchers.add(self._bucket_of(source_addr))
                     existing.sources = max(1, len(existing.vouchers))
                 else:
                     existing.sources = max(existing.sources, peer.sources)
@@ -266,6 +281,10 @@ class PeerStore:
                     peer.vouchers = (
                         {self._bucket_of(source_addr)} if source_addr else {"local"}
                     )
+                    if not source_addr:
+                        peer.native_vouchers = {"local"}
+                    elif self._source_is_native(source_addr, peer.network):
+                        peer.native_vouchers = {self._bucket_of(source_addr)}
                     peer.sources = 1
                 self._peers[peer.key] = peer
                 await self._save_peer(peer)
@@ -313,17 +332,114 @@ class PeerStore:
                         )
                         await self._db.commit()
 
-    def get_peers(self, network: str, verified_only: bool = True) -> list[Peer]:
+    def _source_is_native(self, source_addr: str, network: str) -> bool:
+        """Under --native-vouchers, a reporting transpeer counts as native
+        for a network when its host answered a probe on that network's P2P
+        port. Claims are not consulted; only probe results are."""
+        if not self.config.native_vouchers:
+            return False
+        return any(
+            t.native.get(network, False)
+            for t in self._transpeers.values() if t.addr == source_addr
+        )
+
+    def set_native(self, addr: str, port: int, network: str, ok: bool):
+        entry = self._transpeers.get(f"{addr}:{port}")
+        if entry is not None:
+            entry.native[network] = ok
+
+    def native_transpeer_count(self) -> int:
+        return sum(1 for t in self._transpeers.values() if any(t.native.values()))
+
+    def _rank_key(self, p: Peer):
+        if self.config.native_vouchers:
+            return (len(p.native_vouchers), len(p.vouchers), p.verified, p.last_seen)
+        return (len(p.vouchers), p.verified, p.last_seen)
+
+    def get_peers(self, network: str, verified_only: bool = True,
+                  top: int | None = None) -> list[Peer]:
+        """Peers for a network, best first.
+
+        Under --vouchers the order is by independent corroboration: the peer
+        the most distinct subnets agree on is the one the daemon should try
+        first; under --native-vouchers, corroboration by transpeers that
+        verifiably run the network outranks the rest. With `top` set and
+        --handoff-reserve K, the last K of the first `top` entries are
+        chosen for reporter diversity instead (see `_represent`), so the
+        list a daemon receives is never sourced from one reporter cluster
+        alone.
+        """
         peers = [
             p for p in self._peers.values()
             if p.network == network and (not verified_only or p.verified)
         ]
         if self.config.vouchers:
-            # Most independently corroborated first: the peer the most
-            # distinct subnets agree on is the one the daemon should try first.
-            peers.sort(key=lambda p: (len(p.vouchers), p.verified, p.last_seen),
-                       reverse=True)
+            peers.sort(key=self._rank_key, reverse=True)
+            if top and self.config.handoff_reserve > 0:
+                peers, _ = self._represent(peers, top, self.config.handoff_reserve)
         return peers
+
+    def _represent(self, ranked: list[Peer], top: int, reserve: int
+                   ) -> tuple[list[Peer], int]:
+        """Reserve `reserve` of the first `top` slots for reporter diversity.
+
+        The first `top - reserve` slots keep the ranking. The reporter
+        buckets that vouched for none of those peers are then visited in
+        random order, and each contributes its best-ranked peer, skipping
+        buckets an earlier pick already covered. Displaced peers follow.
+
+        A coordinated attacker whose fakes fill the ranked slots has, by
+        construction, not vouched for the honest peers, so every honest
+        reporter bucket is unrepresented and the reserve goes to honest
+        peers. The attacker can dilute the reserve only by adding
+        reporter buckets that vouch for nothing in the ranked head, which
+        costs prefixes; splitting into more buckets than the honest side
+        buys them a proportional share, never the whole list. A pick must
+        carry RESERVE_MIN_VOUCHERS vouchers, so below the crossover a
+        small attacker cannot turn each stray prefix into a slot.
+
+        Returns the reordered list and the number of unrepresented buckets
+        before the pass, which is the split signal an operator would alarm
+        on.
+        """
+        head = ranked[:max(0, top - reserve)]
+        represented: set = set()
+        for p in head:
+            represented |= p.vouchers
+        all_buckets = {b for p in ranked for b in p.vouchers if b != "local"}
+        unrep = sorted(b for b in all_buckets if b not in represented)
+        n_unrep = len(unrep)
+        random.shuffle(unrep)
+        chosen = {p.key for p in head}
+        picks: list[Peer] = []
+        for b in unrep:
+            if len(picks) >= reserve:
+                break
+            if b in represented:
+                continue
+            cand = next((p for p in ranked
+                         if b in p.vouchers and p.key not in chosen
+                         and len(p.vouchers) >= RESERVE_MIN_VOUCHERS), None)
+            if cand is None:
+                continue
+            picks.append(cand)
+            chosen.add(cand.key)
+            represented |= cand.vouchers
+        rest = [p for p in ranked if p.key not in chosen]
+        return head + picks + rest, n_unrep
+
+    def handoff_unrepresented(self, network: str, top: int) -> int:
+        """Number of reporter buckets with no peer in the ranked head of the
+        hand-off list (before the reserve pass). Zero when one cluster of
+        reporters accounts for the whole head, or when there is no reserve."""
+        if not (self.config.vouchers and self.config.handoff_reserve > 0):
+            return 0
+        peers = sorted(
+            (p for p in self._peers.values() if p.network == network),
+            key=self._rank_key, reverse=True,
+        )
+        _, n = self._represent(peers, top, self.config.handoff_reserve)
+        return n
 
     def get_all_networks(self) -> list[str]:
         return list({p.network for p in self._peers.values()})
@@ -496,6 +612,9 @@ class PeerStore:
     def get_transpeers(self) -> list[TranspeerEntry]:
         return list(self._transpeers.values())
 
+    def get_transpeer(self, addr: str, port: int) -> TranspeerEntry | None:
+        return self._transpeers.get(f"{addr}:{port}")
+
     def get_transpeers_for_query(self, limit: int) -> list[TranspeerEntry]:
         """Return up to `limit` transpeers to query this cycle.
 
@@ -533,8 +652,15 @@ class PeerStore:
         entry = self._transpeers.get(key)
         if entry:
             entry.last_queried = int(time.time())
+            entry.alive = bool(answered)
             if answered:
                 entry.answered += 1
+
+    def live_transpeer_count(self) -> int:
+        """Transpeers whose most recent query was answered. The scanner
+        stops once this reaches the configured target: a node that has
+        found a few live transpeers can learn the rest from them."""
+        return sum(1 for t in self._transpeers.values() if t.alive)
 
     def is_tried(self, entry: TranspeerEntry) -> bool:
         """Under --tried-table an entry that has answered at least
@@ -602,8 +728,11 @@ class PeerStore:
 
         daemon_view = {
             net: [f"{p.source_addr or 'local'}:{depth(p)}"
-                  for p in self.get_peers(net, verified_only=False)[:top]]
+                  for p in self.get_peers(net, verified_only=False, top=top)[:top]]
             for net in (networks or [])
+        }
+        unrepresented = {
+            net: self.handoff_unrepresented(net, top) for net in (networks or [])
         }
         return {
             "transpeers": len(self._transpeers),
@@ -615,6 +744,8 @@ class PeerStore:
             "daemon_view": daemon_view,
             "tried_addrs": sorted(t.addr for t in self._transpeers.values()
                                   if self.is_tried(t)),
+            "unrepresented": unrepresented,
+            "native_transpeers": self.native_transpeer_count(),
         }
 
     async def _save_transpeer(self, entry: TranspeerEntry):

@@ -1,0 +1,18 @@
+# Prefixes this node must never blind-scan. One IPv4 CIDR per line;
+# `#` starts a comment. Pass with --scan-exclude FILE.
+#
+# The reserved ranges (RFC 1918, loopback, link-local, CGNAT, multicast,
+# documentation, benchmarking, 0/8, 240/4) and the US DoD /8s built into
+# transpeer/scanner.py are always skipped and need not be listed. Add here:
+#
+#   - prefixes whose operators have asked not to be probed
+#   - your own provider's ranges, if its acceptable-use policy forbids
+#     scanning even at low rates
+#   - other ranges you know to be sensitively monitored (government,
+#     military, critical infrastructure). Published research-scanner
+#     blocklists are a good start.
+#
+# An explicit --scan-range is not filtered by this file.
+
+# 192.0.2.0/24        # example: an operator who asked to be left alone
+# 198.51.100.0/24     # example

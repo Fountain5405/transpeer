@@ -93,7 +93,8 @@ GRAPH = """graph [
 
 def gen(num_honest, num_attackers, attacker_subnets, bucketed, stop_time,
         fresh_start, snapshot_interval, fake_peers, difficulty, seed,
-        vouchers=False, coordinated=False, tried=False, attacker_start=3):
+        vouchers=False, coordinated=False, tried=False, attacker_start=3,
+        reserve=0, native=False, attacker_native=False):
     random.seed(seed)
     S = resolve_subnets(num_attackers, attacker_subnets)
     if num_honest + 1 + S > 256:
@@ -121,6 +122,12 @@ def gen(num_honest, num_attackers, attacker_subnets, bucketed, stop_time,
         policy_flags += " --vouchers"
     if tried:
         policy_flags += " --tried-table"
+    if reserve:
+        policy_flags += f" --handoff-reserve {reserve}"
+    if native:
+        # Every honest node listens on its networks' daemon ports so the
+        # fresh node's native probes see them as real daemons.
+        policy_flags += " --native-vouchers --sim-daemon-listen"
 
     def transpeer_process(args, start):
         return {
@@ -180,7 +187,7 @@ def gen(num_honest, num_attackers, attacker_subnets, bucketed, stop_time,
             for n in nets)
         args = (f"-m transpeer --bind 0.0.0.0 --port {TRANSPEER_PORT} "
                 f"--scan-range {SCAN_RANGE} --difficulty {difficulty} "
-                f"--networks {specs} --in-memory --sim-pow --no-verify"
+                f"--networks {specs} --in-memory --scan-legacy --sim-pow --no-verify"
                 + policy_flags)
         sp = static_peers_for(nets)
         if sp:
@@ -193,7 +200,7 @@ def gen(num_honest, num_attackers, attacker_subnets, bucketed, stop_time,
     p2p, rpc = network_ports(NETWORKS.index(fresh_net))
     args = (f"-m transpeer --bind 0.0.0.0 --port {TRANSPEER_PORT} "
             f"--scan-range {SCAN_RANGE} --difficulty {difficulty} "
-            f"--networks {fresh_net}:{p2p}:{rpc} --in-memory --sim-pow --no-verify"
+            f"--networks {fresh_net}:{p2p}:{rpc} --in-memory --scan-legacy --sim-pow --no-verify"
             f" --snapshot-interval {snapshot_interval}" + policy_flags)
     # Two seeds only: a real fresh daemon knows a handful of addresses.
     args += f" --static-peers '{static_peers_for([fresh_net], k=2)}'"
@@ -218,6 +225,8 @@ def gen(num_honest, num_attackers, attacker_subnets, bucketed, stop_time,
                 f"--announce-interval {ANNOUNCE_INTERVAL}")
         if coordinated:
             args += " --fake-seed 1"
+        if attacker_native:
+            args += " --native-port-open"
         host(f"attacker{j+1}", ip, transpeer_process(args, attacker_start))
 
     return config, S, first_attacker_bucket
@@ -239,6 +248,14 @@ def main():
                          "serve one shared fake set")
     ap.add_argument("--tried", action="store_true",
                     help="run all transpeer nodes with --tried-table")
+    ap.add_argument("--reserve", type=int, default=0,
+                    help="run all transpeer nodes with --handoff-reserve N")
+    ap.add_argument("--native", action="store_true",
+                    help="run all transpeer nodes with --native-vouchers and "
+                         "--sim-daemon-listen")
+    ap.add_argument("--attacker-native", action="store_true",
+                    help="attackers also listen on the target daemon port, "
+                         "so native probes against them succeed")
     ap.add_argument("--attacker-start", type=int, default=3,
                     help="simulated second at which attackers start (late "
                          "attackers test an established node)")
@@ -255,7 +272,8 @@ def main():
         a.honest, a.attackers, a.attacker_subnets, a.bucketed, a.stop_time,
         a.fresh_start, a.snapshot_interval, a.fake_peers, a.difficulty, a.seed,
         vouchers=a.vouchers, coordinated=a.coordinated,
-        tried=a.tried, attacker_start=a.attacker_start)
+        tried=a.tried, attacker_start=a.attacker_start,
+        reserve=a.reserve, native=a.native, attacker_native=a.attacker_native)
 
     with open(a.output, "w") as f:
         yaml.dump(config, f, default_flow_style=False, sort_keys=False)
@@ -269,7 +287,12 @@ def main():
         policy += '+vouchers'
     if a.tried:
         policy += '+tried'
-    print(f"  policy={policy} attackers={'coordinated' if a.coordinated else 'independent'}")
+    if a.reserve:
+        policy += f'+reserve{a.reserve}'
+    if a.native:
+        policy += '+native'
+    print(f"  policy={policy} attackers={'coordinated' if a.coordinated else 'independent'}"
+          f"{' (daemon port open)' if a.attacker_native else ''}")
     # Machine-readable line for the runner.
     print(f"ECLIPSE_LAYOUT honest={a.honest} attackers={a.attackers} "
           f"attacker_subnets={S} first_attacker_bucket={first_attacker_bucket} "

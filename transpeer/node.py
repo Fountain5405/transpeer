@@ -35,6 +35,8 @@ class Node:
         # (network, addr, port) -> (nonce, solution, bucket) for peers we
         # publish ourselves. A proof is valid for a whole timestamp bucket.
         self._local_proofs: dict[tuple[str, str, int], tuple[bytes, bytes, int]] = {}
+        # addr -> time we last queued a daemon peer for a transpeer probe.
+        self._daemon_peer_probed: dict[str, float] = {}
         for spec in config.networks:
             try:
                 net = get_network(spec)
@@ -52,6 +54,19 @@ class Node:
         log.info("Networks: %s", ", ".join(self._networks.keys()))
 
         await self.store.init()
+        # Ports of the networks we run, for the native probe (--native-vouchers).
+        self.config.native_ports = {
+            name: net.default_port for name, net in self._networks.items()
+        }
+        self._sim_listeners = []
+        if self.config.sim_daemon_listen:
+            async def _accept_and_close(reader, writer):
+                writer.close()
+            for name, net in self._networks.items():
+                srv = await asyncio.start_server(
+                    _accept_and_close, self.config.bind, net.default_port)
+                self._sim_listeners.append(srv)
+                log.info("Sim daemon listener for %s on port %d", name, net.default_port)
         self.server = TranspeerServer(
             self.config, self.store, self.node_id, self.start_time,
             network_names=list(self._networks.keys()),
@@ -93,6 +108,8 @@ class Node:
                 try:
                     peer_infos = await self._extract_peer_infos(name, network)
                     now = int(time.time())
+                    if not self.config.scan_legacy:
+                        self._queue_daemon_peers(peer_infos, now)
                     for info in peer_infos:
                         # Only solve when we hold no proof for this peer in
                         # the current bucket. Re-solving every cycle cost
@@ -130,14 +147,35 @@ class Node:
                     log.error("Failed to extract peers from %s: %s", name, e)
             await asyncio.sleep(EXTRACT_INTERVAL)
 
+    def _queue_daemon_peers(self, peer_infos, now: int):
+        """Discovery through the networks we already belong to: every peer
+        our daemon talks to is a host that may also run a transpeer, so
+        queue it for a probe on the transpeer port. These hosts are in a
+        P2P relationship with us already; probing them is not blind
+        scanning. Each address is queued at most once per six hours."""
+        for info in peer_infos:
+            last = self._daemon_peer_probed.get(info.addr, 0)
+            if now - last >= 6 * 3600:
+                self._daemon_peer_probed[info.addr] = now
+                self.store.add_candidate(info.addr)
+
     async def _scan_loop(self):
-        """Continuously scan random IPs for transpeers."""
+        """Continuously scan random IPs for transpeers.
+
+        Legacy profile: a burst, then a full interval's pause, as before.
+        Paced profile: the batch itself spans the interval, so only the
+        remainder is slept and the configured rate is the wire rate.
+        """
         while True:
+            t0 = time.monotonic()
             try:
                 await self.scanner.scan_batch()
             except Exception as e:
                 log.error("Scan error: %s", e)
-            await asyncio.sleep(SCAN_INTERVAL)
+            if self.config.scan_legacy:
+                await asyncio.sleep(SCAN_INTERVAL)
+            else:
+                await asyncio.sleep(max(0.0, SCAN_INTERVAL - (time.monotonic() - t0)))
 
     async def _query_loop(self):
         """Periodically query a batch of known transpeers for their data.
@@ -212,7 +250,7 @@ class Node:
                 log.info(
                     "STORE_SNAPSHOT transpeers=%d buckets=%d peers=%d "
                     "transpeer_addrs=%s peer_sources=%s voucher_hist=%s daemon_view=%s "
-                    "tried_addrs=%s",
+                    "tried_addrs=%s unrepresented=%s native_tp=%d",
                     s["transpeers"], s["buckets"], s["peers"],
                     ",".join(s["transpeer_addrs"]),
                     ";".join(f"{a}:{n}" for a, n in sorted(s["peer_sources"].items())),
@@ -220,6 +258,8 @@ class Node:
                     "|".join(f"{net}:{','.join(srcs)}"
                              for net, srcs in s["daemon_view"].items()),
                     ",".join(s["tried_addrs"]),
+                    "|".join(f"{net}:{n}" for net, n in s["unrepresented"].items()),
+                    s["native_transpeers"],
                 )
             except Exception as e:
                 log.error("Snapshot error: %s", e)

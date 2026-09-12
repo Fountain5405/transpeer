@@ -68,7 +68,7 @@ def gen(num_honest, num_flooders, flood_rate, stop_time, solve_pow, scenario_nam
             f"-m transpeer --bind 0.0.0.0 --port 7337 "
             f"--scan-range {scan_range} --difficulty 100 "
             f"--networks {NETWORK}:{P2P_PORT}:{RPC_PORT} "
-            f"--in-memory --sim-pow --no-verify"
+            f"--in-memory --scan-legacy --sim-pow --no-verify"
         )
         if static_peers_arg:
             args += f" --static-peers '{static_peers_arg}'"

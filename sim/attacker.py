@@ -56,6 +56,11 @@ def parse_args():
     parser.add_argument("--fake-seed", type=int, default=None,
                         help="Seed for the fake peer set. Attackers sharing a seed "
                              "serve identical fakes (coordinated attack)")
+    parser.add_argument("--native-port-open", action="store_true",
+                        help="Also accept TCP connections on --target-port, as a "
+                             "host running the target network's daemon would. "
+                             "Models an attacker who pays for a daemon per "
+                             "address; without it, native probes fail")
     return parser.parse_args()
 
 
@@ -208,6 +213,12 @@ async def main():
     await site.start()
     log.info("Attacker serving %d fake %s peers on port %d",
              len(attacker.fake_peers), args.target_network, args.port)
+
+    if args.native_port_open:
+        async def _accept_and_close(reader, writer):
+            writer.close()
+        await asyncio.start_server(_accept_and_close, args.bind, args.target_port)
+        log.info("Attacker also listening on daemon port %d", args.target_port)
 
     background = [attacker.announce_loop(), asyncio.Event().wait()]
     if args.serve_while_generating:

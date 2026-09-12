@@ -90,7 +90,7 @@ for i in range(1, 6):
                 "args": (
                     f"-m transpeer --bind 0.0.0.0 --port 7337 "
                     f"--scan-range {SCAN_RANGE} --difficulty {DIFFICULTY} "
-                    f"--networks p2pa:{p2p_port}:{rpc_port} --in-memory --sim-pow"
+                    f"--networks p2pa:{p2p_port}:{rpc_port} --in-memory --scan-legacy --sim-pow"
                 ),
                 "environment": {"PYTHONPATH": TRANSPEER_PATH, "PYTHONUNBUFFERED": "1"},
                 "start_time": "3s",

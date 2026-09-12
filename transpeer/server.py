@@ -146,6 +146,32 @@ class TranspeerServer:
             },
         )
 
+    async def handle_root(self, request: web.Request) -> web.Response:
+        """A human-readable page for whoever looks up the port that probed
+        them. Scanning etiquette: identify yourself, say what the probe
+        was, and give a way to opt out and a way to complain."""
+        contact = self.config.contact or "(operator has not set --contact)"
+        text = (
+            f"This host runs a {PROTOCOL_VERSION} peer-discovery node.\n"
+            "\n"
+            "If you are here because this address connected to TCP port "
+            f"{self.config.port} on your network: that was a single TCP "
+            "connect followed, if the port answered, by one HTTP GET of "
+            "/transpeer. It looks for other nodes of this protocol and "
+            "nothing else. No data on your host was read.\n"
+            "\n"
+            "Blind scanning runs at a few probes per second only while a "
+            "node knows no other node, and stops once it does. To keep your "
+            "prefix out of it, ask the operator below to add it to the "
+            "node's scan exclude list, or publish it in the project's "
+            "shared exclude list.\n"
+            "\n"
+            "Project: https://github.com/Fountain5405/transpeer\n"
+            f"Operator contact: {contact}\n"
+            f"Networks served here: {', '.join(self.network_names)}\n"
+        )
+        return web.Response(text=text, content_type="text/plain")
+
     async def handle_transpeer(self, request: web.Request) -> web.Response:
         """/transpeer is always free — it's the discovery endpoint and
         advertises the current handshake PoW difficulty."""
@@ -206,6 +232,7 @@ class TranspeerServer:
     def create_app(self) -> web.Application:
         app = web.Application()
         app.router.add_get("/transpeer", self.handle_transpeer)
+        app.router.add_get("/", self.handle_root)
         app.router.add_get("/peers/{network}", self.handle_peers)
         app.router.add_get("/transpeers", self.handle_transpeers)
         return app

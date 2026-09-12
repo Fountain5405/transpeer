@@ -128,7 +128,7 @@ def gen_config(num_honest, num_attackers, attacker_fake_peers, difficulty,
         args = (
             f"-m transpeer --bind 0.0.0.0 --port 7337 "
             f"--scan-range {scan_range} --difficulty {difficulty} "
-            f"--networks {nets_arg} --in-memory --sim-pow --no-verify"
+            f"--networks {nets_arg} --in-memory --scan-legacy --sim-pow --no-verify"
         )
         if static_peers_arg:
             args += f" --static-peers '{static_peers_arg}'"

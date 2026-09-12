@@ -5,6 +5,17 @@ from pathlib import Path
 
 TRANSPEER_PORT = 7337
 PROTOCOL_VERSION = "transpeer/1"
+# Shown in the User-Agent of every request we make and on GET /, so a
+# network operator who sees our probe can find out what it was.
+PROJECT_URL = "https://github.com/Fountain5405/transpeer"
+
+
+def user_agent(contact: str = "") -> str:
+    """Identify the probe: protocol, project URL, and how to opt out."""
+    ua = f"{PROTOCOL_VERSION} (+{PROJECT_URL}; peer discovery"
+    if contact:
+        ua += f"; opt-out: {contact}"
+    return ua + ")"
 
 # PoW
 DEFAULT_DIFFICULTY = 100
@@ -66,6 +77,44 @@ class Config:
     tried_table: bool = False
     # Log a STORE_SNAPSHOT line every N seconds (0 = off). Simulation metric.
     snapshot_interval: int = 0
+    # Hand-off reserve: of the first `top` peers handed to the daemon, the
+    # last K are chosen for reporter diversity (one per reporter bucket that
+    # vouched for none of the ranked head) instead of by rank. 0 = off.
+    handoff_reserve: int = 0
+    # Native vouchers: a report counts extra when the reporting transpeer's
+    # host answers on the network's P2P port, i.e. it verifiably runs the
+    # daemon it is vouching for. Requires --vouchers.
+    native_vouchers: bool = False
+    # Simulation only: listen on each configured network's P2P port and close
+    # connections, so native probes against this host succeed as they would
+    # against a real daemon.
+    sim_daemon_listen: bool = False
+    # network -> P2P port for the networks this node runs; filled at startup
+    # from the network plugins, used by the native probe. Not a CLI flag.
+    native_ports: dict = field(default_factory=dict)
+    # Scanning etiquette. Blind scanning of random IPv4 space is what gets
+    # an address reported and blocklisted. The shot in the dark is for a
+    # node that knows nobody, so by default the scanner runs only while
+    # cold: scan_rate probes per second, spread with jitter rather than in
+    # bursts, until scan_target_known transpeers have answered a query,
+    # then scan_idle_rate (default 0: stop). Discovery continues through
+    # gossip, through nodes that contact us, and through the local
+    # daemon's own peers probed on the transpeer port. If the live count
+    # falls back below the target, scanning resumes on its own. Blind
+    # scanning skips the reserved ranges, a built-in list of sensitively
+    # monitored netblocks, and any prefix in scan_exclude. scan_rate 0 (or
+    # --no-scan) disables blind scanning entirely. scan_legacy restores the
+    # pre-etiquette profile (bursts of SCAN_CONCURRENCY every SCAN_INTERVAL,
+    # no backoff, no exclusions beyond reserved, no daemon-peer probing);
+    # simulations use it so their results stay comparable.
+    scan_rate: float = 4.0
+    scan_idle_rate: float = 0.0
+    scan_target_known: int = 3
+    scan_exclude: str | None = None
+    scan_legacy: bool = False
+    # Free-text contact shown on GET / so a network operator who sees our
+    # probes can reach us instead of reporting us.
+    contact: str = ""
 
     def __post_init__(self):
         if not self.in_memory:
@@ -133,6 +182,55 @@ def parse_args() -> Config:
              "from eviction by newcomers.",
     )
     parser.add_argument(
+        "--handoff-reserve", type=int, default=0,
+        help="Reserve K of the daemon's peer slots for peers vouched by "
+        "reporter buckets absent from the ranked head (requires --vouchers).",
+    )
+    parser.add_argument(
+        "--native-vouchers", action="store_true",
+        help="Rank peers first by vouchers from transpeers whose host answers "
+        "on the network's P2P port (requires --vouchers).",
+    )
+    parser.add_argument(
+        "--sim-daemon-listen", action="store_true",
+        help="Simulation only: accept connections on each network's P2P port "
+        "so native probes succeed.",
+    )
+    parser.add_argument(
+        "--scan-rate", type=float, default=4.0,
+        help="Blind-scan probes per second while cold (default 4; 0 disables "
+        "blind scanning).",
+    )
+    parser.add_argument(
+        "--no-scan", action="store_true",
+        help="Never blind-scan: rely on gossip, on nodes that contact us and "
+        "on the local daemon's peers. For residential lines and strict hosts.",
+    )
+    parser.add_argument(
+        "--scan-idle-rate", type=float, default=0.0,
+        help="Probes per second once --scan-target-known transpeers have "
+        "answered (default 0: stop scanning).",
+    )
+    parser.add_argument(
+        "--scan-target-known", type=int, default=3,
+        help="Live (answering) transpeers at which blind scanning stops.",
+    )
+    parser.add_argument(
+        "--scan-exclude", default=None,
+        help="File of CIDR prefixes never to scan (one per line, # comments). "
+        "Applies to blind scanning, not to an explicit --scan-range.",
+    )
+    parser.add_argument(
+        "--scan-legacy", action="store_true",
+        help="Pre-etiquette scan profile: bursts of 500 probes every 10 s, no "
+        "idle backoff, no exclude file. Simulations use it for comparability.",
+    )
+    parser.add_argument(
+        "--contact", default="",
+        help="Operator contact shown on GET / for network operators who see "
+        "our probes.",
+    )
+    parser.add_argument(
         "--snapshot-interval", type=int, default=0,
         help="Log store composition every N seconds (simulation metric).",
     )
@@ -154,6 +252,15 @@ def parse_args() -> Config:
         bucketed=args.bucketed,
         vouchers=args.vouchers,
         tried_table=args.tried_table,
+        handoff_reserve=args.handoff_reserve,
+        native_vouchers=args.native_vouchers,
+        sim_daemon_listen=args.sim_daemon_listen,
+        scan_rate=0.0 if args.no_scan else args.scan_rate,
+        scan_idle_rate=args.scan_idle_rate,
+        scan_target_known=args.scan_target_known,
+        scan_exclude=args.scan_exclude,
+        scan_legacy=args.scan_legacy,
+        contact=args.contact,
         snapshot_interval=args.snapshot_interval,
     )
 

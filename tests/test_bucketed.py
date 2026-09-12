@@ -314,6 +314,114 @@ async def test_tried_table():
         ps.MAX_TRANSPEERS_TRACKED = saved
 
 
+async def test_handoff_reserve():
+    print("\n=== Hand-off reserve: reporter diversity in the daemon's list ===")
+    from transpeer.peerstore import Peer
+
+    def peer(ip):
+        return Peer(network="x", addr=ip, port=1, last_seen=1)
+
+    def mk(reserve):
+        return PeerStore(Config(in_memory=True, bucketed=True, vouchers=True,
+                                subnet_prefix=24, handoff_reserve=reserve))
+
+    async def fill(s):
+        # A coordinated attacker: 30 buckets, each vouching for the same 6
+        # fakes. Honest side: 4 buckets; H1 vouched by buckets 0 and 1, H2
+        # by 2 and 3, H3 by bucket 0 only. No attacker bucket vouches for
+        # an honest peer, which is what makes the corral a corral.
+        for b in range(100, 130):
+            for k in range(6):
+                await s.add_peer(peer(f"9.9.{k}.1"), source_addr=f"11.0.{b}.1")
+        for b in (0, 1):
+            await s.add_peer(peer("8.8.1.1"), source_addr=f"11.0.{b}.1")
+        for b in (2, 3):
+            await s.add_peer(peer("8.8.2.1"), source_addr=f"11.0.{b}.1")
+        await s.add_peer(peer("8.8.3.1"), source_addr="11.0.0.1")
+
+    s = mk(0)
+    await fill(s)
+    top = [p.addr for p in s.get_peers("x", verified_only=False, top=5)[:5]]
+    check(all(a.startswith("9.9.") for a in top),
+          "without a reserve the whole hand-off is attacker-vouched")
+    check(s.handoff_unrepresented("x", 5) == 0, "unrepresented is 0 when the reserve is off")
+
+    s = mk(2)
+    await fill(s)
+    ranked = s.get_peers("x", verified_only=False, top=5)
+    top = [p.addr for p in ranked[:5]]
+    check(all(a.startswith("9.9.") for a in top[:3]), "the ranked head keeps the top-3 by vouchers")
+    check(set(top[3:]) == {"8.8.1.1", "8.8.2.1"},
+          "the reserve hands 2 slots to the best peers of unrepresented buckets, one per cluster")
+    check(len(ranked) == 9 and len({p.key for p in ranked}) == 9,
+          "displaced peers follow; nothing is lost or duplicated")
+    check(s.handoff_unrepresented("x", 5) == 4, "4 honest buckets were unrepresented before the pass")
+    wire = [p.addr for p in s.get_peers("x", verified_only=False)[:5]]
+    check(all(a.startswith("9.9.") for a in wire), "the list served on the wire (no top) is unchanged")
+    snap = s.snapshot(["x"], top=5)
+    # daemon_view records each peer's first reporter; H1's is 11.0.0.1, H2's 11.0.2.1.
+    honest_srcs = {"11.0.0.1", "11.0.2.1"}
+    view_srcs = [e.rpartition(":")[0] for e in snap["daemon_view"]["x"][:5]]
+    check(snap["unrepresented"] == {"x": 4} and set(view_srcs[3:]) == honest_srcs,
+          "snapshot reports unrepresented buckets and the diversified daemon view")
+
+    # A one-bucket cluster cannot buy a slot: its peers carry one voucher,
+    # below RESERVE_MIN_VOUCHERS, so the reserve falls back to rank.
+    s = mk(2)
+    for b in range(100, 110):
+        for k in range(6):
+            await s.add_peer(peer(f"9.9.{k}.1"), source_addr=f"11.0.{b}.1")
+    for b in (0, 1):
+        await s.add_peer(peer(f"8.8.{b}.1"), source_addr=f"11.0.{b}.1")
+    top = [p.addr for p in s.get_peers("x", verified_only=False, top=5)[:5]]
+    check(all(a.startswith("9.9.") for a in top) and s.handoff_unrepresented("x", 5) == 2,
+          "single-voucher peers are never reserve picks, though their buckets count as unrepresented")
+
+    # No attack: only honest reporters. The reserve must not disturb a
+    # head whose reporters already cover every bucket.
+    s = mk(2)
+    for b in range(5):
+        for k in range(4):
+            await s.add_peer(peer(f"8.8.{k}.1"), source_addr=f"11.0.{b}.1")
+    top = [p.addr for p in s.get_peers("x", verified_only=False, top=3)[:3]]
+    check(len(top) == 3 and s.handoff_unrepresented("x", 3) == 0,
+          "with one reporter cluster nothing is unrepresented and the head stands")
+
+
+async def test_native_vouchers():
+    print("\n=== Native vouchers ===")
+    from transpeer.peerstore import Peer
+
+    def peer(ip):
+        return Peer(network="x", addr=ip, port=1, last_seen=1)
+
+    s = PeerStore(Config(in_memory=True, bucketed=True, vouchers=True,
+                         native_vouchers=True, subnet_prefix=24))
+    for b in (1, 2, 3, 4):
+        await s.add_transpeer(entry(f"11.0.{b}.1"))
+    s.set_native("11.0.1.1", 7337, "x", True)
+    s.set_native("11.0.2.1", 7337, "x", False)
+    for b in (2, 3, 4):
+        await s.add_peer(peer("7.7.7.1"), source_addr=f"11.0.{b}.1")
+    await s.add_peer(peer("7.7.7.2"), source_addr="11.0.1.1")
+    ps = s.get_peers("x", verified_only=False)
+    check(ps[0].addr == "7.7.7.2", "one native voucher outranks three non-native ones")
+    check(ps[0].native_vouchers == {"11.0.1.0/24"} and ps[1].native_vouchers == set(),
+          "native sets follow probe results, not claims")
+    await s.add_peer(peer("7.7.7.3"), source_addr="11.0.9.1")
+    check(s.get_peers("x", verified_only=False)[-1].native_vouchers == set(),
+          "an unknown or unprobed reporter is not native")
+    check(s.snapshot(["x"])["native_transpeers"] == 1, "snapshot counts native transpeers")
+    check(s.get_transpeer("11.0.1.1", 7337).native == {"x": True}, "probe results are kept per network")
+
+    s0 = PeerStore(Config(in_memory=True, bucketed=True, vouchers=True, subnet_prefix=24))
+    await s0.add_transpeer(entry("11.0.1.1"))
+    s0.set_native("11.0.1.1", 7337, "x", True)
+    await s0.add_peer(peer("7.7.7.2"), source_addr="11.0.1.1")
+    check(s0.get_peers("x", verified_only=False)[0].native_vouchers == set(),
+          "without --native-vouchers nothing is native")
+
+
 async def main():
     await test_admission()
     await test_eviction()
@@ -322,6 +430,8 @@ async def main():
     await test_snapshot()
     await test_vouchers()
     await test_tried_table()
+    await test_handoff_reserve()
+    await test_native_vouchers()
     print(f"\nResults: {passed} passed, {failed} failed")
     sys.exit(1 if failed else 0)
 

@@ -7,7 +7,7 @@ import time
 
 import aiohttp
 
-from .config import Config, PROTOCOL_VERSION, TRANSPEER_PORT
+from .config import Config, PROTOCOL_VERSION, TRANSPEER_PORT, user_agent
 from .peerstore import Peer, PeerStore, TranspeerEntry
 from .pow import (
     verify as pow_verify, verify_simulated as pow_verify_sim,
@@ -46,6 +46,9 @@ class TranspeerClient:
         self.config = config
         self.store = store
         self._handshake_cache = HandshakeProofCache()
+        # Every request identifies the probe: protocol, project URL, and
+        # the operator's opt-out contact if set.
+        self._headers = {"User-Agent": user_agent(config.contact)}
         # Client's own IP for handshake PoW binding. In sim mode we can't
         # easily know it; the server is authoritative (it uses request.remote).
         # We construct proofs for whatever the server sees; we don't need to
@@ -130,7 +133,7 @@ class TranspeerClient:
         """
         url = f"http://{addr}:{port}/transpeer"
         try:
-            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=5)) as session:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=5), headers=self._headers) as session:
                 async with session.get(url) as resp:
                     if resp.status != 200:
                         return None
@@ -151,7 +154,7 @@ class TranspeerClient:
         """Fetch peer list for a network from a transpeer."""
         url = f"http://{addr}:{port}/peers/{network}"
         try:
-            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10), headers=self._headers) as session:
                 data = await self._get_with_pow(session, url, addr)
                 if not data:
                     return []
@@ -177,7 +180,7 @@ class TranspeerClient:
         """Fetch known transpeers from a transpeer."""
         url = f"http://{addr}:{port}/transpeers"
         try:
-            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10), headers=self._headers) as session:
                 data = await self._get_with_pow(session, url, addr)
                 if not data:
                     return []
@@ -194,6 +197,37 @@ class TranspeerClient:
             log.debug("Failed to fetch transpeers from %s:%d: %s", addr, port, e)
             return []
 
+    async def _probe_native(self, entry: TranspeerEntry, networks: list[str]):
+        """Under --native-vouchers, check once per (transpeer, network)
+        whether the transpeer's host answers on the network's P2P port.
+
+        Only networks this node runs can be checked, since only for those
+        does it know the port. A transpeer's claim to run a network is
+        never used; the probe result is what makes its vouchers native.
+        The probe is a TCP connect, the same check the verifier makes on
+        peers; a production build would use the network plugin's handshake.
+        Results are kept for the life of the entry (no re-probe yet).
+        """
+        stored = self.store.get_transpeer(entry.addr, entry.port)
+        if stored is None:
+            return
+        for network in networks:
+            port = self.config.native_ports.get(network)
+            if port is None or network in stored.native:
+                continue
+            ok = False
+            try:
+                _, writer = await asyncio.wait_for(
+                    asyncio.open_connection(entry.addr, port), timeout=5)
+                writer.close()
+                await writer.wait_closed()
+                ok = True
+            except (OSError, asyncio.TimeoutError):
+                ok = False
+            self.store.set_native(entry.addr, entry.port, network, ok)
+            log.info("Native probe %s:%d for %s: %s", entry.addr, port, network,
+                     "open" if ok else "closed")
+
     async def query_transpeer(self, entry: TranspeerEntry):
         """Query a known transpeer for all its data and merge into our store."""
         log.info("Querying transpeer %s:%d", entry.addr, entry.port)
@@ -203,6 +237,9 @@ class TranspeerClient:
             log.info("Transpeer %s:%d unreachable", entry.addr, entry.port)
             return False
         await self.store.add_transpeer(updated)
+
+        if self.config.native_vouchers:
+            await self._probe_native(entry, updated.networks)
 
         for network in updated.networks:
             peers = await self.fetch_peers(entry.addr, entry.port, network)

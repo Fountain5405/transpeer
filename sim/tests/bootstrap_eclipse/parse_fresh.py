@@ -10,8 +10,10 @@ Prints one CSV fragment on stdout:
   queries_total,query_attacker_pct,peers_total,peer_attacker_pct,
   multi_voucher_pct,daemon_attacker_pct,
   top20_honest_max_vouchers,top20_attacker_min_vouchers,
-  tried_total,tried_honest,snapshots
+  tried_total,tried_honest,snapshots,unrepresented
 
+unrepresented: reporter buckets with no peer in the ranked head of the
+daemon's list (the split signal behind --handoff-reserve); 0 when off.
 multi_voucher_pct: share of peer entries reported by two or more distinct
 buckets. daemon_attacker_pct: share of the top-20 peers per network, in the
 order get_peers hands them out, whose source is an attacker.
@@ -28,7 +30,8 @@ SNAP_RE = re.compile(
     r"STORE_SNAPSHOT transpeers=(\d+) buckets=(\d+) peers=(\d+) "
     r"transpeer_addrs=(\S*) peer_sources=(\S*)"
     r"(?: voucher_hist=(\S*) daemon_view=(\S*))?"
-    r"(?: tried_addrs=(\S*))?")
+    r"(?: tried_addrs=(\S*))?"
+    r"(?: unrepresented=(\S*))?")
 QUERY_RE = re.compile(r"Querying transpeer (\d+\.\d+\.\d+\.\d+):\d+")
 
 
@@ -75,7 +78,7 @@ def main():
                     snapshots += 1
                     last_snap = m
     except FileNotFoundError:
-        print("0,0.0,0,0,0,0.0,0,0.0,0.0,0.0,0,0,0,0,0")
+        print("0,0.0,0,0,0,0.0,0,0.0,0.0,0.0,0,0,0,0,0,0")
         sys.exit(0)
 
     store_total = store_attacker = honest_known = buckets = 0
@@ -83,6 +86,7 @@ def main():
     multi = hist_total = dv_total = dv_attacker = 0
     hon_max, att_min = 0, None
     tried_total = tried_honest = 0
+    unrepresented = 0
     if last_snap:
         store_total = int(last_snap.group(1))
         buckets = int(last_snap.group(2))
@@ -126,6 +130,11 @@ def main():
                 tried_total += 1
                 if cls(ip) == "honest":
                     tried_honest += 1
+        if last_snap.group(9):
+            # First network listed is the fresh node's own.
+            first = last_snap.group(9).split("|")[0]
+            _, _, n = first.partition(":")
+            unrepresented = int(n) if n.isdigit() else 0
 
     q_total = sum(queries.values())
     print(",".join([
@@ -135,7 +144,7 @@ def main():
         pct(multi, hist_total), pct(dv_attacker, dv_total),
         str(hon_max), str(att_min or 0),
         str(tried_total), str(tried_honest),
-        str(snapshots),
+        str(snapshots), str(unrepresented),
     ]))
 
 

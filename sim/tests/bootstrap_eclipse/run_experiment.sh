@@ -54,10 +54,11 @@ if [ ! -f "$RESULTS" ]; then
         echo "# Transpeer bootstrap_eclipse experiment"
         echo "# Honest: $HONEST, fresh node starts at ${FRESH_START}s, simulated time: ${STOP_TIME}s, seed: $SEED"
         echo "# Attacker mode: $ATTACKER_MODE, attacker start: ${ATTACKER_START}s, seeds: $SEEDS"
+        echo "# Attacker daemon port open: ${ATTACKER_NATIVE:-0}, hand-off reserve: ${RESERVE:-5}"
         echo "# Machine: $(nproc) threads, $(free -g | awk '/^Mem:/{print $2}') GB RAM, parallelism: $SIM_PARALLELISM"
         echo "# Started: $(date)"
         echo ""
-        echo "scenario,attackers,attacker_subnets,policy,seed,real_time_sec,run_mem_mb,store_total,store_attacker_pct,honest_known,buckets,queries_total,query_attacker_pct,peers_total,peer_attacker_pct,multi_voucher_pct,daemon_attacker_pct,top20_honest_max_vouchers,top20_attacker_min_vouchers,tried_total,tried_honest,snapshots,status"
+        echo "scenario,attackers,attacker_subnets,policy,seed,real_time_sec,run_mem_mb,store_total,store_attacker_pct,honest_known,buckets,queries_total,query_attacker_pct,peers_total,peer_attacker_pct,multi_voucher_pct,daemon_attacker_pct,top20_honest_max_vouchers,top20_attacker_min_vouchers,tried_total,tried_honest,snapshots,unrepresented,status"
     } > "$RESULTS"
 fi
 
@@ -72,6 +73,10 @@ run_scenario() {
     if [ "$ATTACKER_MODE" = "coordinated" ]; then
         NAME="${NAME}_coord"
         MODE_FLAGS="--coordinated"
+    fi
+    if [ "${ATTACKER_NATIVE:-0}" = "1" ]; then
+        NAME="${NAME}_anative"
+        MODE_FLAGS="$MODE_FLAGS --attacker-native"
     fi
     NAME="${NAME}_s${RUN_SEED}"
     local TOTAL=$((HONEST + 1 + A))
@@ -106,6 +111,9 @@ run_scenario() {
         bucketed_vouchers) POLICY_FLAGS="--bucketed --vouchers" ;;
         current_tried) POLICY_FLAGS="--tried" ;;
         bucketed_vouchers_tried) POLICY_FLAGS="--bucketed --vouchers --tried" ;;
+        bucketed_vouchers_reserve) POLICY_FLAGS="--bucketed --vouchers --reserve ${RESERVE:-5}" ;;
+        bucketed_vouchers_native) POLICY_FLAGS="--bucketed --vouchers --native" ;;
+        bucketed_vouchers_native_reserve) POLICY_FLAGS="--bucketed --vouchers --native --reserve ${RESERVE:-5}" ;;
         *) echo "unknown policy: $POLICY"; return 1 ;;
     esac
 

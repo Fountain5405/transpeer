@@ -113,7 +113,7 @@ for net_i, net_name in enumerate(NETWORKS):
                     "args": (
                         f"-m transpeer --bind 0.0.0.0 --port 7337 "
                         f"--scan-range {SCAN_RANGE} --difficulty 1 "
-                        f"--networks {net_spec} --in-memory --no-pow"
+                        f"--networks {net_spec} --in-memory --scan-legacy --no-pow"
                     ),
                     "environment": {
                         "PYTHONPATH": TRANSPEER_PATH,

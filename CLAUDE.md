@@ -42,12 +42,22 @@ Invariants and traps that have already cost time. Session status lives in
 - The runner's memory guard uses a per-host estimate. Measured cost grows
   with host count (33 MB at 700 hosts, 52 MB at 3000) and the guard
   ignores swap.
+- **Every simulation generator passes `--scan-legacy` to transpeer
+  nodes.** The production scan profile is paced (4 probes/s) and stops
+  once 3 transpeers have answered; the legacy profile (bursts of 500 per
+  10 s, no backoff, no daemon-peer probing) is what every result in
+  `docs/manuscript.md` was measured under. A new generator without the
+  flag produces cells that are not comparable to any existing row.
 
 ## Protocol code
 
 - Defense policies are behind flags that default off (`--bucketed`,
-  `--vouchers`, `--tried-table`, `--subnet-prefix`). Existing experiments
-  depend on the defaults staying unchanged. `tests/test_bucketed.py` pins
+  `--vouchers`, `--tried-table`, `--handoff-reserve`, `--native-vouchers`,
+  `--subnet-prefix`). Existing experiments depend on the defaults staying
+  unchanged. The scanning-etiquette defaults (`--scan-rate`,
+  `--scan-idle-rate`, `--scan-target-known`, sensitive-range exclusion)
+  are production defaults and are deliberately *not* off; simulations
+  opt out with `--scan-legacy`. `tests/test_bucketed.py` pins
   the default behaviour, including the current policy's known weaknesses;
   a failure there after a "fix" is the test doing its job.
 - The peer-extraction loop caches each local peer's EquiX proof per
