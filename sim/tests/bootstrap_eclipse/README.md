@@ -358,21 +358,37 @@ is the variable, 500 attackers unless stated.
   over seeds: 2 % at 3 prefixes, 26 % at 4, 61 % at 5, 76 % at 6, 88 % at
   8. Store share matched the closed form to within half a point on every
   seed. Entry at four prefixes in five of five replicas.
-- **Depth against uptime** (`results_uptime_*.txt`). At 4 prefixes the
-  attacker peaks at 15 of 20 slots in minute 10 and is gone from minute
-  25. At 6 it holds 6 slots from minute 40 on. Observed honest depth
-  reaches its list-depth ceiling of 23 by minute 50. The bootstrap window
-  is minutes 10 to 25.
-- **200 honest** (`results_h200_*.txt`), about 120 on the primary network.
-  At a 60-minute window the crossover is between 24 and 32 prefixes,
-  against 4 to 6 at 50 honest: a 5.6-fold rise for 4.6-fold more honest
-  transpeers on the network. The victim's query budget throttles observed
-  attacker depth as much as honest depth.
-- **Tried table, late attackers** (`results_tried_late.txt`), 1500
-  attackers arriving at 1500 s against a node up since 300 s. Under the
-  current policy the node retained 40 of 50 honest transpeers without the
-  table and 49 with it. Under bucketing it retained 50 either way; the
-  table is redundant there. It does not act on peer ranking.
+- **Depth against uptime** (`results_uptime_*_seeds.txt`, five seeds;
+  single-seed originals in `results_uptime_*.txt`). At 4 prefixes the
+  attacker is out of the daemon's list by the 30-minute mark in every
+  seed (27 % mean at 15 min, 0 % from 30 min). At 6 it persists: 68 % at
+  15 min, 33 % at 30, 21 % at 60 and 20 % at 120, present in four of five
+  seeds after two hours. Observed honest depth is identical at 60 and 120
+  minutes in every seed, so it saturates within the hour.
+- **200 honest** (`results_h200_*_seeds.txt`, five seeds), about 120 on
+  the primary network. At a 60-minute window the attacker enters the
+  list between 16 and 24 prefixes (2/5 seeds at 16, 5/5 at 24, mean 36 %)
+  and holds a majority at 32 (58 %), against entry at 4 and majority at 5
+  for 50 honest. The single seed had said 24 to 32; seed 1 alone shows
+  0 % at 24. The victim's query budget throttles observed attacker depth
+  as much as honest depth in every seed.
+- **Tried table, late attackers** (`results_tried_late_seeds.txt`, five
+  seeds), 1500 attackers arriving at 1500 s against a node up since
+  300 s. Under the current policy the node retained 38 to 44 of 50 honest
+  transpeers without the table and 48 to 49 with it. Under bucketing it
+  retained 50 in every seed either way; the table is redundant there. One
+  answering fake became tried in 5 of 40 cells. The table does not act on
+  peer ranking.
+
+The five-seed runs come from `run_replicas.sh` (two chains in parallel,
+30 Shadow workers each; per-cell wall-clock was the same as at 60
+workers for these host counts). Their seed-1 rows differ from the
+single-seed files in the timing-dependent columns because the worker
+count changed: Shadow is deterministic per seed only at a fixed
+`general.parallelism` (manuscript §10). `aggregate_seeds.py <results_file>`
+prints mean and range over seeds per cell. A committed config is the
+last file generated under that scenario name; the stop time and worker
+count behind a given row are in its results file header.
 
 Correction recorded here as well as in the manuscript: the 15-minute
 window gives the fresh node two query batches, not three; the third begins
@@ -380,11 +396,10 @@ at the stop time.
 
 ## Remaining follow-ups
 
-1. Replicas for the uptime, 200-honest and tried-table runs.
-2. Honest counts beyond 200, to test whether the crossover keeps scaling.
+1. Honest counts beyond 200, to test whether the crossover keeps scaling.
    Needs a /15 scan range or a lower attacker bucket ceiling.
-3. Query batch size and interval as defense parameters; they set how fast
+2. Query batch size and interval as defense parameters; they set how fast
    both honest and attacker depth are observed.
-4. Tie-breaking at equal voucher depth; fakes tie honest peers exactly at S.
-5. Rerun the 25-subnet column at 40 simulated minutes to confirm query
+3. Tie-breaking at equal voucher depth; fakes tie honest peers exactly at S.
+4. Rerun the 25-subnet column at 40 simulated minutes to confirm query
    share converges to the store formula.

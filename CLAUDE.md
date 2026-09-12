@@ -27,8 +27,13 @@ Invariants and traps that have already cost time. Session status lives in
   fast work volume. Commit `configs/*.yaml`, `results*.txt` and READMEs
   only; runners compress per-host logs after parsing.
 - Shadow derives every simulated host's randomness from the config's
-  `general.seed`. Two runs of one config are identical. A replica is a
-  different seed; `gen_config.py` sets `general.seed` from `--seed`.
+  `general.seed`. Two runs of one config are identical **only at the same
+  `general.parallelism`**: changing the worker count changes event
+  ordering between hosts and shifts timing-dependent metrics by a few
+  points (measured, manuscript §10). Keep the worker count fixed within
+  an experiment; the results header records it. A replica is a different
+  seed at the same worker count; `gen_config.py` sets `general.seed` from
+  `--seed`.
 - Per-host stderr is `hosts/<name>/python3.12.1000.stderr`; result parsers
   glob that name. If the interpreter basename changes, they break.
 - `pgrep -f` / `pkill -f` with a pattern that appears in your own command

@@ -1,0 +1,17 @@
+# Transpeer bootstrap_eclipse experiment
+# Honest: 50, fresh node starts at 300s, simulated time: 3900s, seed: 42
+# Attacker mode: coordinated, attacker start: 3s, seeds: 1 2 3 4 5
+# Machine: 64 threads, 251 GB RAM, parallelism: 30
+# Started: Fri 11 Sep 2026 04:47:55 AM UTC
+
+scenario,attackers,attacker_subnets,policy,seed,real_time_sec,run_mem_mb,store_total,store_attacker_pct,honest_known,buckets,queries_total,query_attacker_pct,peers_total,peer_attacker_pct,multi_voucher_pct,daemon_attacker_pct,top20_honest_max_vouchers,top20_attacker_min_vouchers,tried_total,tried_honest,snapshots,status
+A500_S4_bucketed_vouchers_coord_s1,500,4,bucketed_vouchers,1,900,12685,63,19.0,50,55,220,9.1,829,12.1,44.1,0.0,23,0,0,0,59,ok
+A500_S4_bucketed_vouchers_coord_s2,500,4,bucketed_vouchers,2,901,12886,63,19.0,50,55,220,8.2,761,13.1,41.5,0.0,17,0,0,0,59,ok
+A500_S4_bucketed_vouchers_coord_s3,500,4,bucketed_vouchers,3,960,12794,63,19.0,50,55,220,10.9,839,11.9,42.2,0.0,21,0,0,0,59,ok
+A500_S4_bucketed_vouchers_coord_s4,500,4,bucketed_vouchers,4,915,12575,62,19.4,50,54,220,8.2,722,13.9,46.4,0.0,20,0,0,0,59,ok
+A500_S4_bucketed_vouchers_coord_s5,500,4,bucketed_vouchers,5,840,12873,63,19.0,50,55,220,10.5,756,13.2,44.8,0.0,24,0,0,0,59,ok
+A500_S6_bucketed_vouchers_coord_s1,500,6,bucketed_vouchers,1,856,12701,69,26.1,50,57,220,13.6,828,12.1,44.0,35.0,23,6,0,0,59,ok
+A500_S6_bucketed_vouchers_coord_s2,500,6,bucketed_vouchers,2,900,13018,69,26.1,50,57,220,14.5,770,13.0,41.6,35.0,17,6,0,0,59,ok
+A500_S6_bucketed_vouchers_coord_s3,500,6,bucketed_vouchers,3,945,12816,69,26.1,50,57,220,13.2,839,11.9,42.2,20.0,21,6,0,0,59,ok
+A500_S6_bucketed_vouchers_coord_s4,500,6,bucketed_vouchers,4,870,12594,68,26.5,50,56,220,11.8,719,13.9,46.3,0.0,19,0,0,0,59,ok
+A500_S6_bucketed_vouchers_coord_s5,500,6,bucketed_vouchers,5,856,12813,69,26.1,50,57,220,10.5,756,13.2,44.8,15.0,24,6,0,0,59,ok
