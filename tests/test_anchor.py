@@ -242,6 +242,46 @@ def test_blobdb():
         check(BlobDB.load(Path(d) / "missing.json").blob_count() == 0, "load missing file -> empty")
 
 
+def test_weight():
+    from transpeer.anchor import CHAIN_ID
+    from transpeer.anchor.blob import encode_blob, blob_hash
+    from transpeer.anchor.blobdb import BlobDB, Commitment
+    from transpeer.anchor.weight import (
+        Share, canonical_window, blob_weights, transpeer_weights,
+        publisher_weights, coverage, bootstrapped, BOOTSTRAP_COVERAGE,
+    )
+    print("weighting and coverage")
+    ba = encode_blob("monero", 1, [("1.1.1.1", 7337), ("2.2.2.2", 7337)])
+    bb = encode_blob("monero", 1, [("2.2.2.2", 7337), ("3.3.3.3", 7337)])
+    ha, hb = blob_hash(ba), blob_hash(bb)
+    db = BlobDB()
+    db.add(ba, Commitment(ha, "share", "v", "s1", "wa", 1, 1), 1)
+    db.add(bb, Commitment(hb, "share", "v", "s2", "wb", 1, 1), 1)
+
+    def mk(i, parent, diff, aux, wallet="w"):
+        return Share(bytes([i]) * 32, "v", i, parent, diff, 1000 + i, wallet, aux)
+    s = {}
+    s[bytes([1]) * 32] = mk(1, bytes(32), 100, {CHAIN_ID: ha}, "wa")
+    s[bytes([2]) * 32] = mk(2, bytes([1]) * 32, 200, {CHAIN_ID: hb}, "wb")
+    s[bytes([3]) * 32] = mk(3, bytes([2]) * 32, 300, {}, "wc")
+    s[bytes([4]) * 32] = mk(4, bytes([3]) * 32, 400, {CHAIN_ID: ha}, "wa")
+    s[bytes([9]) * 32] = mk(9, bytes([2]) * 32, 9999, {CHAIN_ID: hb}, "wb")  # off-fork
+    win = canonical_window(s, bytes([4]) * 32, window=3)
+    check([x.height for x in win] == [4, 3, 2], "walk parents from tip, window 3")
+    check([x.height for x in canonical_window(s, bytes([4]) * 32, 10)] == [4, 3, 2, 1],
+          "walk stops at unknown parent")
+    bw = blob_weights(win)
+    check(bw == {ha: 400, hb: 200}, "blob weight sums share difficulty on the canonical fork only")
+    tw = transpeer_weights(bw, db)
+    check(tw == {("1.1.1.1", 7337): 400, ("2.2.2.2", 7337): 600, ("3.3.3.3", 7337): 200},
+          "transpeer weight sums over blobs listing it")
+    check(publisher_weights(win) == {"wa": 400, "wb": 200}, "publisher weights (diagnostic)")
+    check(blob_weights(win, chain_id=b"\x00" * 32) == {}, "other chain id contributes nothing")
+    check(coverage(10, 5) == 0.5 and coverage(0, 0) == 0.0, "coverage ratio")
+    check(bootstrapped(10, 5) and not bootstrapped(10, 4) and BOOTSTRAP_COVERAGE == 0.5,
+          "bootstrapped at one half")
+
+
 def main():
     test_keccak()
     test_varint()
@@ -249,6 +289,7 @@ def main():
     test_merkle()
     test_monero_block()
     test_blobdb()
+    test_weight()
     print(f"\nResults: {passed} passed, {failed} failed")
     sys.exit(1 if failed else 0)
 
