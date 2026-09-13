@@ -1,6 +1,7 @@
 """Main transpeer node — orchestrates all components."""
 
 import asyncio
+import ipaddress
 import logging
 import os
 import time
@@ -104,6 +105,14 @@ class Node:
                 await aux_runner.setup()
                 await web.TCPSite(aux_runner, self.config.aux_rpc_bind, self.config.aux_rpc_port).start()
                 log.info("Aux-chain RPC listening on %s:%d", self.config.aux_rpc_bind, self.config.aux_rpc_port)
+                try:
+                    is_loopback = ipaddress.ip_address(self.config.aux_rpc_bind).is_loopback
+                except ValueError:
+                    is_loopback = False
+                if not is_loopback:
+                    log.warning("Aux-chain RPC bound to %s: this interface trusts its caller; "
+                                "restrict it to your own P2Pool node with a firewall.",
+                                self.config.aux_rpc_bind)
 
             # Run periodic tasks
             await asyncio.gather(

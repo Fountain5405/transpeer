@@ -18,6 +18,8 @@ from .publisher import Publisher, Solution
 
 log = logging.getLogger("transpeer.anchor.auxrpc")
 
+MAX_TEMPLATE_RECORDS = 64  # bound records a caller can create for one blob (final review, finding 1)
+
 
 class AuxRpcServer:
     def __init__(self, publisher: Publisher, db: BlobDB, aux_diff: int, clock=time.time):
@@ -84,6 +86,9 @@ class AuxRpcServer:
             return self._reject("no merge-mining tag in coinbase")
         if not verify_merkle_proof(aux_hash, list(proof), path, tag.root):
             return self._reject("merkle proof does not reach the tag root")
+        n_templates = sum(1 for c in self.db.commitments(aux_hash) if c.kind == "template")
+        if n_templates >= MAX_TEMPLATE_RECORDS:
+            return self._reject("too many template records for this blob")
         now = int(self.clock())
         sol = Solution(aux_hash, head.height, head.prev_id, head.timestamp, tag.root,
                        proof, path, seed_hash, self.publisher.address, now)

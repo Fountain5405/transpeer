@@ -129,7 +129,8 @@ async def test_curation_and_rotation():
     # Solutions are kept.
     sol = Solution(h2, 3_000_000, b"\x11" * 32, now, b"\x22" * 32, (b"\x33" * 32,), 1, b"\x44" * 32, "wallet", now)
     pub.record_solution(sol)
-    check(pub.solutions == [sol], "solution recorded")
+    check(list(pub.solutions) == [sol], "solution recorded")
+    check(pub.solutions.maxlen == 1024, "solutions deque bounded at 1024")
     await store.close()
 
 
@@ -205,9 +206,23 @@ async def test_aux_rpc():
     check(len(recs) == 1 and recs[0].kind == "template" and recs[0].publisher == "WALLET"
           and recs[0].proof == tuple(proof) and recs[0].path == path, "template commitment stored with proof")
     check(db.get(aux_hash) == blob, "blob now in the database")
+    # Template records for one blob are bounded (final review, finding 1).
+    from transpeer.anchor.auxrpc import MAX_TEMPLATE_RECORDS
+    for i in range(MAX_TEMPLATE_RECORDS):
+        tmpl_i = build_block_blob(16, 16, now, bytes([i + 32]) * 32, 0, 3_000_000, extra)
+        sub_i = dict(sub, blob=tmpl_i.hex())
+        r = await call("merge_mining_submit_solution", sub_i)
+        if i < MAX_TEMPLATE_RECORDS - 1:
+            check(r.get("result") == {"status": "accepted"}, f"template submission {i} accepted")
+        else:
+            check("error" in r, "submission past the template cap rejected")
+    recs = db.commitments(aux_hash)
+    check(sum(1 for c in recs if c.kind == "template") == MAX_TEMPLATE_RECORDS,
+          "template commitments capped at MAX_TEMPLATE_RECORDS")
+    check(rpc.stats["submit_rejected"] == 1, "the over-cap submission was rejected")
     bad = dict(sub, path=path ^ 1)
     r = await call("merge_mining_submit_solution", bad)
-    check("error" in r and rpc.stats["submit_rejected"] == 1, "wrong path rejected")
+    check("error" in r and rpc.stats["submit_rejected"] == 2, "wrong path rejected")
     bad = dict(sub, aux_hash="ab" * 32)
     r = await call("merge_mining_submit_solution", bad)
     check("error" in r, "unknown aux_hash rejected")

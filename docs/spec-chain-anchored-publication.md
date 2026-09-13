@@ -599,6 +599,12 @@ thousand current CPUs running continuously, and the corral collapses
 when they stop. The figure moves with adoption and should be re-read
 from the observers when quoted.
 
+The aux-chain RPC (§4.2) is a trusted-caller interface: the sidecar
+verifies that a submitted template's tag commits to its aux hash but
+cannot verify the block's proof-of-work without RandomX and chain
+state, which the reader path (§6) supplies; implementations bound the
+records a caller can create and SHOULD bind the RPC to loopback.
+
 ## 13. Sizes and performance
 
 | item | size or cost |

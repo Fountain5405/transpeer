@@ -66,8 +66,11 @@ P2Pool with `--merge-mine 127.0.0.1:7338 <WALLET>`.
 
 - **Aux RPC.** `--aux-rpc-bind` sets the interface the aux server
   listens on and `--aux-rpc-port` (default 7338) the port; `--aux-diff`
-  sets the minimum share difficulty accepted, and should be set to the
-  venue's own minimum.
+  is the difficulty reported to P2Pool, which decides when to call
+  `submit_solution` — the sidecar does not verify share difficulty
+  itself. The aux-chain RPC trusts whatever calls it, so leave
+  `--aux-rpc-bind` on its loopback default or firewall it to your own
+  P2Pool node.
 - **Anchor policy.** `--anchor-chain` selects the target chain (default
   `monero`); `--anchor-min-age` (default 14 days) and `--anchor-max-new`
   (default 0.25) bound how much of a published list can be recently

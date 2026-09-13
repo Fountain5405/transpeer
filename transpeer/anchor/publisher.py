@@ -5,7 +5,7 @@ reports."""
 
 import ipaddress
 import time
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from dataclasses import dataclass
 
 from ..config import Config
@@ -17,6 +17,7 @@ from .blobdb import BlobDB
 BODY_MAX_AGE = 86400       # spec §4.1: at most one new list body per day
 QUALITY_MIN_SAMPLES = 5
 QUALITY_MIN_RATE = 0.8
+MAX_SOLUTIONS = 1024       # bound growth; full PoW verification is deferred (spec §17)
 
 
 @dataclass(frozen=True)
@@ -44,7 +45,7 @@ class Publisher:
         self.body: bytes | None = None
         self.body_since: float = 0.0
         self.address: str = ""
-        self.solutions: list[Solution] = []
+        self.solutions: deque[Solution] = deque(maxlen=MAX_SOLUTIONS)
         self._issued: OrderedDict[bytes, bytes] = OrderedDict()
 
     # -- curation, spec §4.1 ------------------------------------------------
