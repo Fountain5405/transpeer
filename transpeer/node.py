@@ -37,6 +37,11 @@ class Node:
         self._local_proofs: dict[tuple[str, str, int], tuple[bytes, bytes, int]] = {}
         # addr -> time we last queued a daemon peer for a transpeer probe.
         self._daemon_peer_probed: dict[str, float] = {}
+        # Chain-anchored publication (--anchor-publish); built in run().
+        self.blobdb = None
+        self.publisher = None
+        self.auxrpc = None
+        self._anchor_saved = (0, 0)
         for spec in config.networks:
             try:
                 net = get_network(spec)
@@ -67,9 +72,22 @@ class Node:
                     _accept_and_close, self.config.bind, net.default_port)
                 self._sim_listeners.append(srv)
                 log.info("Sim daemon listener for %s on port %d", name, net.default_port)
+        if self.config.anchor_publish:
+            from .anchor.blobdb import BlobDB
+            from .anchor.publisher import Publisher
+            from .anchor.auxrpc import AuxRpcServer
+            self._anchor_path = self.config.data_dir / "anchor_blobs.json"
+            self.blobdb = BlobDB() if self.config.in_memory else BlobDB.load(self._anchor_path)
+            self.publisher = Publisher(self.config, self.store, self.blobdb)
+            self.auxrpc = AuxRpcServer(self.publisher, self.blobdb, self.config.aux_diff)
+            log.info("Anchor publisher on: %d blobs loaded, aux RPC on %s:%d, aux_diff %d",
+                     self.blobdb.blob_count(), self.config.aux_rpc_bind,
+                     self.config.aux_rpc_port, self.config.aux_diff)
+
         self.server = TranspeerServer(
             self.config, self.store, self.node_id, self.start_time,
             network_names=list(self._networks.keys()),
+            blobdb=self.blobdb, publisher=self.publisher,
         )
 
         try:
@@ -81,6 +99,12 @@ class Node:
             await site.start()
             log.info("HTTP server listening on %s:%d", self.config.bind, self.config.port)
 
+            if self.auxrpc is not None:
+                aux_runner = web.AppRunner(self.auxrpc.create_app())
+                await aux_runner.setup()
+                await web.TCPSite(aux_runner, self.config.aux_rpc_bind, self.config.aux_rpc_port).start()
+                log.info("Aux-chain RPC listening on %s:%d", self.config.aux_rpc_bind, self.config.aux_rpc_port)
+
             # Run periodic tasks
             await asyncio.gather(
                 self._extract_loop(),
@@ -90,6 +114,7 @@ class Node:
                 self._prune_loop(),
                 self._candidate_loop(),
                 self._snapshot_loop(),
+                self._anchor_loop(),
             )
         finally:
             await self.store.close()
@@ -272,3 +297,21 @@ class Node:
                 await self.scanner.probe_candidates()
             except Exception as e:
                 log.error("Candidate probe error: %s", e)
+
+    async def _anchor_loop(self):
+        """Re-curate the published list and persist the blob database."""
+        if self.publisher is None:
+            return
+        while True:
+            try:
+                if self.publisher.refresh():
+                    log.info("Anchor list body changed: %d entries",
+                             len(self.publisher.curate()))
+                if not self.config.in_memory:
+                    state = (self.blobdb.blob_count(), self.blobdb.commitment_count())
+                    if state != self._anchor_saved and state != (0, 0):
+                        self.blobdb.save(self._anchor_path)
+                        self._anchor_saved = state
+            except Exception:  # noqa: BLE001
+                log.exception("anchor loop")
+            await asyncio.sleep(60)

@@ -286,11 +286,53 @@ async def test_blob_endpoints():
     await store.close()
 
 
+async def test_node_wiring():
+    import tempfile
+    import aiohttp
+    from transpeer.node import Node
+    print("node wiring")
+    with tempfile.TemporaryDirectory() as d:
+        cfg = Config(port=17340, bind="127.0.0.1", data_dir=Path(d), networks=["monero"],
+                     no_verify=True, no_pow=True, scan_rate=0.0, anchor_publish=True,
+                     aux_rpc_bind="127.0.0.1", aux_rpc_port=17341, aux_diff=77)
+        node = Node(cfg)
+        check(node.publisher is None and node.auxrpc is None, "anchor objects created in run(), not __init__")
+        task = asyncio.create_task(node.run())
+        for _ in range(50):
+            await asyncio.sleep(0.1)
+            if node.auxrpc is not None and node.server is not None:
+                break
+        await asyncio.sleep(0.3)
+        async with aiohttp.ClientSession() as s:
+            async with s.post("http://127.0.0.1:17341/", json={"jsonrpc": "2.0", "id": "1",
+                                                                "method": "merge_mining_get_chain_id"}) as r:
+                j = await r.json()
+                check(j["result"]["ticker"] == "TPL", "aux RPC reachable through Node")
+            async with s.post("http://127.0.0.1:17341/", json={"jsonrpc": "2.0", "id": "1",
+                              "method": "merge_mining_get_aux_block",
+                              "params": {"address": "W", "aux_hash": "00" * 32, "height": 1, "prev_id": "00" * 32}}) as r:
+                j = await r.json()
+                check(j["result"] == {}, "empty store publishes nothing")
+            async with s.get("http://127.0.0.1:17340/blobs/index") as r:
+                check(r.status == 200 and (await r.json())["blobs"] == [], "index served by the node")
+        check(not (Path(d) / "anchor_blobs.json").exists() and node.blobdb.blob_count() == 0,
+              "empty database is not written to disk")
+        task.cancel()
+        try:
+            await task
+        except (asyncio.CancelledError, Exception):  # noqa: BLE001
+            pass
+    # Without the flag nothing is started.
+    node2 = Node(Config(port=17342, in_memory=True, no_verify=True, no_pow=True, scan_rate=0.0))
+    check(node2.publisher is None and node2.blobdb is None, "flag off: no anchor objects")
+
+
 async def main():
     await test_config_and_first_seen()
     await test_curation_and_rotation()
     await test_aux_rpc()
     await test_blob_endpoints()
+    await test_node_wiring()
     print(f"\nResults: {passed} passed, {failed} failed")
     sys.exit(1 if failed else 0)
 
