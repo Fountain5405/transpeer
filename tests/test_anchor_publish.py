@@ -9,6 +9,7 @@ Run:  PYTHONPATH=$PWD .venv/bin/python tests/test_anchor_publish.py
 import asyncio
 import hashlib
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -47,6 +48,18 @@ async def test_config_and_first_seen():
     e = store.get_transpeer("5.5.5.5", 7337)
     check(e.first_seen == t0 and e.last_seen == t0 + 100, "first_seen kept on re-add")
     await store.close()
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cfg = Config(data_dir=Path(tmpdir), no_verify=True)
+        store1 = PeerStore(cfg)
+        await store1.init()
+        await store1.add_transpeer(TranspeerEntry("6.6.6.6", 7337, ["monero"], last_seen=t0))
+        await store1.close()
+        store2 = PeerStore(cfg)
+        await store2.init()
+        e2 = store2.get_transpeer("6.6.6.6", 7337)
+        check(e2 is not None and e2.first_seen == t0, "first_seen survives a store restart")
+        await store2.close()
 
 
 async def main():

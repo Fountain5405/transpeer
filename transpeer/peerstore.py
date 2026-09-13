@@ -194,6 +194,13 @@ class PeerStore:
             );
         """)
         await self._db.commit()
+        async with self._db.execute("PRAGMA table_info(transpeers)") as cur:
+            columns = {row[1] async for row in cur}
+        if "first_seen" not in columns:
+            await self._db.execute(
+                "ALTER TABLE transpeers ADD COLUMN first_seen INTEGER NOT NULL DEFAULT 0"
+            )
+            await self._db.commit()
         await self._load()
 
     async def _load(self):
@@ -213,6 +220,7 @@ class PeerStore:
                     addr=row[0], port=row[1],
                     networks=row[2].split(",") if row[2] else [],
                     last_seen=row[3],
+                    first_seen=row[4] or row[3],
                 )
                 self._transpeers[entry.key] = entry
 
@@ -756,9 +764,10 @@ class PeerStore:
         if not self._db:
             return
         await self._db.execute("""
-            INSERT OR REPLACE INTO transpeers (addr, port, networks, last_seen)
-            VALUES (?, ?, ?, ?)
-        """, (entry.addr, entry.port, ",".join(entry.networks), entry.last_seen))
+            INSERT OR REPLACE INTO transpeers (addr, port, networks, last_seen, first_seen)
+            VALUES (?, ?, ?, ?, ?)
+        """, (entry.addr, entry.port, ",".join(entry.networks), entry.last_seen,
+              entry.first_seen))
         await self._db.commit()
 
     # -- Candidates (IPs that queried us, potential transpeers) --
