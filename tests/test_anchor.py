@@ -202,12 +202,53 @@ def test_monero_block():
         check(True, "truncated blob raises")
 
 
+def test_blobdb():
+    import tempfile
+    from transpeer.anchor.blob import encode_blob, blob_hash, list_body
+    from transpeer.anchor.blobdb import BlobDB, Commitment
+    print("blob database")
+    db = BlobDB()
+    b1 = encode_blob("monero", 100, [("8.8.8.8", 7337), ("1.1.1.1", 7337)])
+    b2 = encode_blob("monero", 101, [("8.8.8.8", 7337), ("1.1.1.1", 7337)])  # same body
+    b3 = encode_blob("monero", 101, [("9.9.9.9", 7337)])
+    c1 = Commitment(blob_hash(b1), "share", "venue-a", "share:1", "wallet-x", 1000, 5000)
+    check(db.add(b1, c1, now=5001), "add first blob")
+    check(not db.add(b1, Commitment(b"\0" * 32, "share", "v", "r", "p", 1, 1), now=5002),
+          "reject commitment whose hash mismatches")
+    check(not db.add(b1 + b"\x00", Commitment(blob_hash(b1 + b"\x00"), "share", "v", "r", "p", 1, 1), 5002),
+          "reject non-canonical blob")
+    c2 = Commitment(blob_hash(b2), "block", "", "3000000:aa", "wallet-x", 10 ** 9, 6000, (b"\x01" * 32,), 1)
+    check(db.add(b2, c2, now=6001), "add reissue of same body")
+    check(db.body_count() == 1 and db.blob_count() == 2 and db.commitment_count() == 2,
+          "body stored once, two blobs, two commitments")
+    check(db.get(blob_hash(b2)) == b2 and db.get(blob_hash(b1)) == b1, "reconstruct blobs from body+period")
+    check(db.get(b"\x07" * 32) is None, "missing hash")
+    c1b = Commitment(blob_hash(b1), "share", "venue-a", "share:2", "wallet-x", 1200, 5100)
+    check(db.add(b1, c1b, now=5101) and len(db.commitments(blob_hash(b1))) == 2, "second commitment appended")
+    check(db.add(b1, c1b, now=5102) and len(db.commitments(blob_hash(b1))) == 2, "duplicate commitment ignored")
+    check(db.add(b3, Commitment(blob_hash(b3), "share", "venue-b", "share:9", "w2", 7, 7000), 7001), "third blob")
+    idx = db.index_since(5500)
+    check([h for h, _, _ in idx] == [blob_hash(b2), blob_hash(b3)], "index_since filters and orders by first_seen")
+    check(db.index_since(0, limit=1)[0][0] == blob_hash(b1), "index limit")
+    check(db.has_body_entry("1.1.1.1", 7337) and not db.has_body_entry("1.1.1.1", 1), "has_body_entry")
+    check(db.entries_of(blob_hash(b3)) == (("9.9.9.9", 7337),), "entries_of")
+    # Persistence round trip.
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "anchor_blobs.json"
+        db.save(p)
+        db2 = BlobDB.load(p)
+        check(db2.blob_count() == 3 and db2.get(blob_hash(b2)) == b2, "save/load blobs")
+        check(db2.commitments(blob_hash(b2))[0] == c2, "save/load commitment with proof")
+        check(BlobDB.load(Path(d) / "missing.json").blob_count() == 0, "load missing file -> empty")
+
+
 def main():
     test_keccak()
     test_varint()
     test_blob()
     test_merkle()
     test_monero_block()
+    test_blobdb()
     print(f"\nResults: {passed} passed, {failed} failed")
     sys.exit(1 if failed else 0)
 
