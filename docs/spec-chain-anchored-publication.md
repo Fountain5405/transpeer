@@ -697,3 +697,57 @@ as assumptions; the text above was corrected where they were wrong.
   `--merge-mine` target, the 500 ms poll, the 30-minute expiry and the
   period rotation, a low `aux_diff` producing `submit_solution` calls
   with proofs, and the observer handshake and peer-list walk.
+
+## 17. Implementation notes
+
+Decided on 2026-09-13 when the build started. These are engineering
+choices about how the specification is realised and tested; the
+protocol above is unchanged by them.
+
+**Build order.** Four slices, each behind flags that default off, each
+mergeable on its own:
+
+1. `transpeer/anchor/`: the list blob (§3.1), the P2Pool Merkle tree
+   and proof check (§6.4), commitment records and the blob database
+   (§3.2, §3.3), weighting (§7) and coverage (§8). Pure code, property
+   tests, no I/O.
+2. The publisher: the aux-chain JSON-RPC server (§4.2), curation from
+   the peer store (§4.1), period rotation, and `/blob/{hash}` and
+   `/blobs/index` on the transpeer port (§5).
+3. The reader: the newcomer path (§6), blob gossip (§5), the observer
+   client (§6.5), challenges (§9), and the published/unpublished tags
+   in the hand-off ranking (§7).
+4. The Shadow experiment of §16 with a venue oracle.
+
+**What Shadow can and cannot test.** Shadow runs the sidecar unchanged
+against a Python *venue oracle* in place of a P2Pool node. The oracle
+speaks P2Pool's client side of §4.2 to the sidecar (the 500 ms poll,
+the 1800 s expiry, `submit_solution` with a Merkle proof), mints shares
+that carry the committed hashes at rates proportional to configured
+hashrates, and mints anchor-chain blocks with merge-mining tags. It
+serves the §5 anchor and venue endpoints as a transpeer with a monerod
+and a P2Pool node would. P2Pool itself and monerod do not run in
+Shadow: both need RandomX with a 2 GB dataset per host, and P2Pool
+needs a monerod for templates and ZMQ notifications.
+
+**Simulated proof-of-work.** Under a sim-only flag the RandomX check of
+§6.2 and §6.5 is replaced by SHA-256 over the same hashing blob against
+the same difficulty rule. The verifier code path is the production one
+with the hash function swapped; the oracle mines by the same rule at a
+difficulty that a Python process meets in milliseconds. Nothing else in
+verification is stubbed: Merkle proofs, tag parsing, linkage, the
+canonical-fork rule and weighting all run as written.
+
+**What only a real P2Pool node can test**, on Monero testnet after
+slice 2: P2Pool's actual poll cadence and expiry against the sidecar,
+the exact serialisation of `merge_mining_submit_solution`, the
+observer handshake and peer-list walk, and share parsing from
+`pool_block_parser.inl`. Whether P2Pool accepts monerod's `--regtest`
+mode, which would make this test take minutes rather than a testnet
+sync, is unverified.
+
+**Byte-level fixtures.** Slice 1 carries test vectors for the merge
+mining tag and the Merkle tree taken from P2Pool's own tests
+(`tests/src/merkle_tests.cpp`, `merge_mining_tests.cpp` at v4.18) so
+that the Python implementation is checked against P2Pool's, not
+against itself.
