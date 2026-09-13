@@ -2338,8 +2338,8 @@ async def test_node_wiring():
                 check(j["result"] == {}, "empty store publishes nothing")
             async with s.get("http://127.0.0.1:17340/blobs/index") as r:
                 check(r.status == 200 and (await r.json())["blobs"] == [], "index served by the node")
-        check((Path(d) / "anchor_blobs.json").exists() or node.blobdb.blob_count() == 0,
-              "no save needed for an empty database")
+        check(not (Path(d) / "anchor_blobs.json").exists() and node.blobdb.blob_count() == 0,
+              "empty database is not written to disk")
         task.cancel()
         try:
             await task
