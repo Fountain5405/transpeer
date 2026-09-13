@@ -327,12 +327,59 @@ async def test_node_wiring():
     check(node2.publisher is None and node2.blobdb is None, "flag off: no anchor objects")
 
 
+async def test_poller_end_to_end():
+    from aiohttp import web
+    import aiohttp
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "sim"))
+    from mm_poller import MergeMiningPoller
+    from transpeer.anchor import CHAIN_ID
+    from transpeer.anchor.blobdb import BlobDB
+    from transpeer.anchor.auxrpc import AuxRpcServer
+    from transpeer.anchor.merkle import merkle_tree, merkle_root, merkle_proof, build_mm_tag
+    from transpeer.anchor.monero import build_block_blob
+    from transpeer.anchor.publisher import Publisher
+    print("P2Pool-style poller end to end")
+    clock = {"t": 2_000_000_000.0}
+    cfg = Config(in_memory=True, no_verify=True, anchor_publish=True, aux_diff=5)
+    store = PeerStore(cfg)
+    await store.init()
+    await _add(store, "60.0.0.1", first_seen=int(clock["t"]) - 20 * 86400, answered=2)
+    db = BlobDB()
+    pub = Publisher(cfg, store, db, clock=lambda: clock["t"])
+    rpc = AuxRpcServer(pub, db, aux_diff=5, clock=lambda: clock["t"])
+    runner = web.AppRunner(rpc.create_app())
+    await runner.setup()
+    await web.TCPSite(runner, "127.0.0.1", 17343).start()
+    poller = MergeMiningPoller("http://127.0.0.1:17343/", "WALLET", clock=lambda: clock["t"])
+    async with aiohttp.ClientSession() as s:
+        check(await poller.run_once(s) is True and poller.chain_id == CHAIN_ID.hex(), "first poll: chain id and job")
+        first = poller.aux_hash
+        check(await poller.run_once(s) is False and poller.aux_hash == first, "second poll: unchanged")
+        # 1799 s later, still the same period? No: periods are 1500 s, so the hash changed.
+        clock["t"] += 1600
+        check(await poller.run_once(s) is True and poller.aux_hash != first and not poller.expired,
+              "hash rotates before P2Pool's 1800 s expiry")
+        # A solution for the *previous* hash (P2Pool's ring) is accepted.
+        prev_hash, prev_blob = poller.previous[-2]
+        leaves = [bytes.fromhex(prev_hash)]
+        tag = build_mm_tag(1, 0, merkle_root(leaves))
+        tmpl = build_block_blob(16, 16, int(clock["t"]), b"\x11" * 32, 0, 3_000_001,
+                                b"\x01" + bytes(32) + tag)
+        proof, path = merkle_proof(merkle_tree(leaves), leaves[0])
+        r = await poller.submit(s, tmpl, proof, path, b"\x22" * 32, aux_hash=prev_hash)
+        check(r.get("result") == {"status": "accepted"}, "solution for a previous hash accepted (single-leaf tree)")
+        check(poller.polls == 3 and poller.changes == 2, "poller counters")
+    await runner.cleanup()
+    await store.close()
+
+
 async def main():
     await test_config_and_first_seen()
     await test_curation_and_rotation()
     await test_aux_rpc()
     await test_blob_endpoints()
     await test_node_wiring()
+    await test_poller_end_to_end()
     print(f"\nResults: {passed} passed, {failed} failed")
     sys.exit(1 if failed else 0)
 
