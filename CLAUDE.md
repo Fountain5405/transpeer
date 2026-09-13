@@ -19,7 +19,14 @@ Invariants and traps that have already cost time. Session status lives in
 - **Never edit a checkout while a Shadow experiment is running from it.**
   bash reads `run_experiment.sh` incrementally, and the config generator
   and the `transpeer` package are re-read at the start of every scenario.
-  Prepare the next experiment in a separate worktree.
+  Prepare the next experiment in a separate worktree. Documentation
+  written during a run goes on `master` in the main checkout; when the
+  run ends, `git merge --ff-only master` in the worktree *before*
+  committing its results, then fast-forward master.
+- The runner keys each scenario's data directory by scenario name
+  (attacker count, prefix count, policy, seed), not by stop time or
+  honest count. Two runs sharing a name overwrite each other's data;
+  parallel chains must use disjoint names.
 - Machine-specific paths (Shadow binary, interpreter, storage roots,
   worker count) come from `sim/simenv.sh`, overridable from the
   environment. Do not put absolute paths in generators or runners.
