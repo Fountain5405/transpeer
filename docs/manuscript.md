@@ -1112,10 +1112,24 @@ mode, coinbase Merkle proofs and tag parsing on the reading side; the
 blob database and its endpoints; weighting, coverage, challenges; and
 optionally the policy hook. Header verification for a year-old
 checkpoint is a good fraction of an hour on a small machine, reduced by
-sampling. The design depends on facts about P2Pool's merge-mining and
-P2P interfaces that are stated from memory and listed for verification
-in the specification, and on P2Pool's share of Monero's hashrate, which
-sets the price and should be looked up rather than quoted.
+sampling. The P2Pool interface facts the design rests on were verified against
+the v4.18 source on 2026-09-13 and are recorded in the specification's
+§15: the merge-mining RPC and tag layout are as described, every share's
+sidechain data lists each merge-mined chain's aux hash explicitly, the
+merge-mining client reports every share that meets the aux difficulty
+together with its Merkle proof, and P2Pool nodes keep about twelve
+hours of shares. Two findings changed the design: the client drops an
+aux job whose hash has not changed for thirty minutes, so a published
+list carries a period field that rotates its hash without changing its
+content; and P2Pool already contains, behind a compile-time flag, an
+aux-job donation message signed with the author's key that puts one job
+into every node's templates, which is a third route, a maintainer-
+curated anchor list with the whole venue's work behind it, recorded in
+the specification as such. P2Pool's share of Monero's hashrate, read from the
+three observers the same day, was 6.65 percent on the main sidechain,
+0.42 on mini and 0.07 on nano, about 7 percent together against a
+reported peak above 18 percent in May 2025; half of it is about 210
+megahashes per second, on the order of ten to twenty thousand CPUs.
 
 The no-change route has an early-adoption weakness worth stating: the
 honest weight behind published lists is the hashrate of miners who run
@@ -1135,7 +1149,13 @@ second is what to ask the maintainer for.
 
 Discovery inherits the anchor chain's security and no more: for a chain
 that can be 51-percented cheaply, the anchor is exactly as weak, and the
-clearnet defenses of §6 remain the ones doing the work there. An
+clearnet defenses of §6 remain the ones doing the work there. That
+ceiling is not hypothetical even for Monero: in August 2025 the Qubic
+project claimed a majority of the network's hashrate and produced
+reorganisations reported at 6 and 18 blocks deep. An anchored newcomer
+during such an episode follows whichever chain the majority extends,
+which is all a chain-anchored design can promise, and the clearnet
+defenses keep working regardless. An
 attacker who is a newcomer's entire first view can still delay it, only
 not mislead it. The policy layer's verdicts are heuristics with
 tolerances, and they bite only once aware miners are a majority.

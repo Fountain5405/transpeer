@@ -74,9 +74,18 @@ little-endian.
 | 4 | 1 | version, `0x01` |
 | 5 | 1 | `n`, length of the anchor-chain name |
 | 6 | n | anchor-chain name, UTF-8, e.g. `monero` |
-| 6+n | 8 | `created_at`, Unix seconds |
+| 6+n | 8 | `period`, the 25-minute period index `floor(unix_seconds / 1500)` at which this blob was issued |
 | 14+n | 2 | `count`, number of entries, 1 to 64 |
 | 16+n | 6 × count | entries: IPv4 address (4 bytes, network order) then port (2 bytes) |
+
+The `period` field exists because of a verified P2Pool behaviour (§4.2):
+the merge-mining client drops a chain whose aux hash has not changed
+for 1800 seconds. A publisher therefore reissues its blob every period
+with only `period` changed, so the hash rotates while the list does
+not. The *list body* is the blob with `period` zeroed; two blobs with
+the same list body publish the same list. Storage, churn rules and
+challenges are defined over list bodies where that matters (§3.3, §9,
+§10).
 
 Canonical form, which a blob MUST satisfy to be valid:
 
@@ -106,7 +115,7 @@ For each commitment a sidecar has verified it keeps:
 | `publisher` | the wallet address in the share, or in the block's coinbase |
 | `difficulty` | the share difficulty, or the block difficulty |
 | `timestamp` | the share or block timestamp |
-| `proof` | what is needed to recompute the tag's Merkle root from the leaf: leaf index, sibling hashes, aux-chain count and nonce |
+| `proof` | for `block`: the sibling hashes from the tag's Merkle tree; the slot, aux-chain count and nonce are recomputed from the chain id and the tag (§6.4). For `share`: empty, because the share's own sidechain data carries the aux hash explicitly (§6.5) |
 
 ### 3.3 Blob database
 
@@ -114,9 +123,13 @@ Every transpeer keeps a table keyed by blob hash: the blob bytes and the
 set of commitment records that reference it. Rows are content-addressed
 and self-checking. A row MUST NOT be stored unless at least one
 commitment referencing it has been verified (§6); uncommitted blobs are
-discarded on arrival. Retention: all rows within the coverage window
-(§8) MUST be kept; older rows SHOULD be kept, since they are small and
-serve the fallback in §6.7.
+discarded on arrival. Because a publisher reissues its blob every
+period (§3.1), implementations MUST store each distinct list body once
+and reconstruct a period's blob from the body and the period on demand,
+so that a publisher costs about one body plus eight bytes per period
+rather than a full blob per period. Retention: all rows within the
+coverage window (§8) MUST be kept; older rows SHOULD be kept, since
+they are small and serve the fallback in §6.7.
 
 ## 4. Publishing
 
@@ -139,28 +152,58 @@ sidecar has observed. It SHOULD apply, in order:
    challenges (§9) in the last 7 days.
 
 A list SHOULD change rarely. A publisher SHOULD NOT emit more than one
-new blob per day unless an entry has become unreachable.
+new list body per day unless an entry has become unreachable; the
+period-driven reissue of the same body (§3.1) does not count.
 
 ### 4.2 The aux-chain interface
 
 The sidecar publishes by posing as a merge-mined chain to the
-operator's P2Pool node. P2Pool's merge-mining support calls the aux
-chain's JSON-RPC interface; the sidecar serves that interface on a local
-port and the operator points P2Pool at it. The sidecar:
+operator's P2Pool node, through the interface P2Pool documents in
+`docs/MERGE_MINING.MD` and implements in
+`merge_mining_client_json_rpc.cpp` (verified against v4.18). P2Pool is
+pointed at the sidecar with `--merge-mine IP:port WALLET_ADDRESS`
+(HTTPS with certificate pinning optional), and there is no limit on the
+number of merge-mined chains beyond the fifteen or so that the Merkle
+slot assignment can hold. P2Pool polls the aux-block method every 500
+milliseconds. The interface is JSON-RPC over HTTP POST, three methods:
 
-- answers the chain-id request with the constant
-  `SHA-256("transpeer/anchor/v1")`;
-- answers the aux-block request with its current list blob hash as the
-  aux hash, the blob bytes as the aux blob, and an aux difficulty large
-  enough that P2Pool never treats a share as a solution for it;
-- accepts and ignores any solution submission.
+- `merge_mining_get_chain_id`: the sidecar answers with `chain_id`, the
+  constant `SHA-256("transpeer/anchor/v1")` in hex, and MAY add
+  `ticker` `"TPL"`.
+- `merge_mining_get_aux_block`, sent with `address`, the current
+  `aux_hash`, the Monero `height` and `prev_id`: the sidecar answers with
+  `aux_hash` (the list blob hash), `aux_blob` (the blob bytes, opaque to
+  P2Pool), and `aux_diff`. An empty result, or the same `aux_hash` as in
+  the request, means "unchanged", which makes polling cheap. P2Pool
+  records the time of the last *change* of `aux_hash` and drops a chain
+  whose hash has not changed for 1800 seconds, or whose difficulty is
+  zero (verified: `last_updated` is set only in the changed branch of
+  `parse_merge_mining_get_aux_block`, and `get_params` compares it with
+  `EXPIRE_TIME`). The sidecar therefore MUST set a nonzero difficulty
+  and MUST change `aux_hash` at least every 1800 seconds; the `period`
+  field of §3.1 does that every 1500 seconds without changing the list.
+- `merge_mining_submit_solution`, sent by P2Pool with `aux_blob`,
+  `aux_hash`, the Monero block template `blob`, the `merkle_proof`
+  (sibling hashes), the `path` bitmap and the RandomX `seed_hash`
+  whenever a share's proof-of-work meets `aux_diff`: the sidecar answers
+  `{"status":"accepted"}` and stores the proof.
+
+**Difficulty strategy.** Set `aux_diff` to the venue's minimum share
+difficulty, so that every share the node finds is reported to the
+sidecar with its Merkle proof. That is how the sidecar learns the
+`proof` field of §3.2 for the Monero blocks it finds, since a found
+block is one of those shares, and it costs nothing: the "solution" is
+the miner's own share. A high difficulty would keep the leaf in every
+template (the leaf is included whenever the chain's parameters are
+fresh, whether or not any share meets its difficulty) but would leave
+the sidecar without proofs.
 
 P2Pool then carries the hash as an aux leaf in every share template the
-node builds, and in every Monero block the node finds. The share's
-proof-of-work binds the leaf at mining time, so a commitment cannot be
-produced after the fact and a publisher cannot equivocate between
-readers. Whether P2Pool includes aux leaves whose difficulty is never
-met is item 1 in §15.
+node builds, and in every Monero block the node finds; each share's
+sidechain data also lists the chain id, the aux hash and the difficulty
+explicitly (§6.5). The share's proof-of-work binds the hash at mining
+time, so a commitment cannot be produced after the fact and a publisher
+cannot equivocate between readers.
 
 ### 4.3 Availability duty
 
@@ -255,6 +298,29 @@ built-in discovery default as the argument, since it gives every miner
 something truthful to publish at no cost and makes the honest weight
 the venue's from day one.
 
+### 4.6 Route C: a donated aux job (exists, maintainer-controlled)
+
+P2Pool v4.18 contains, behind the compile-time flag
+`WITH_MERGE_MINING_DONATION` and TLS, an `AUX_JOB_DONATION` P2P message:
+a set of aux jobs (chain id, aux hash, difficulty) signed with the
+P2Pool author's key, verified by every receiving node against that key,
+rebroadcast, and added to the receiving node's own templates for 1800
+seconds after the last refresh (`p2pool::update_aux_data`,
+`set_aux_job_donation`). The donor's node then treats every share on
+the venue as a candidate solution for its chain (`on_external_block`).
+This is how the author can have the whole venue merge-mine one job.
+
+For this proposal it is a third route with a different shape: one aux
+job, hence one list, carried by every share in the venue, with the
+venue's whole hashrate behind it and no fork, but only the holder of
+the donation key can publish it. That is a maintainer-curated anchor
+list, distributed with proof-of-work and verifiable by a newcomer, and
+it is a legitimate design where a project is willing to have the P2Pool
+maintainer, or a build with a different key, curate its seed list. It
+is not the many-publishers design of Routes A and B, and the two can
+coexist: the donated job as the floor everyone carries, per-miner lists
+on top.
+
 ## 5. Transport
 
 Endpoints on the transpeer HTTP port, all free of handshake proof-of-work
@@ -306,29 +372,61 @@ changes nothing.
 
 For every block in the coverage window (§8), fetch the coinbase and its
 Merkle path; verify the path against the header's transaction root.
-Parse `tx_extra` for the merge-mining tag. A block with no tag is
-*untagged*. A tagged block's tag is a Merkle root; the tag's leaves are
-not known until a share or a commitment record supplies them.
+Parse `tx_extra` for the merge-mining tag, whose layout (P2Pool
+`docs/MERGE_MINING.MD`, verified against v4.18) is: one byte `0x03`;
+one byte length; a varint of *Merkle tree parameters* packing
+`n_aux_chains` and a 32-bit `aux_nonce` (bits 0–2 give the width of the
+count field, the count follows, then the nonce, the rest reserved); and
+the 32-byte Merkle root. `n_aux_chains` counts the P2Pool sidechain
+itself plus every merge-mined chain. A block with no tag is *untagged*.
+A tagged block's leaves are not known until a share or a commitment
+record supplies them.
 
 ### 6.4 Aux leaves and venues
 
 For a tagged block, a leaf is proven by a commitment record's `proof`
-(§3.2): recompute the Merkle root from the leaf, the sibling hashes,
-the aux-chain count and nonce, and compare with the tag. A venue leaf is
-a share id; resolving it means obtaining that share (§6.5). A transpeer
+(§3.2). The leaf's slot is `SHA-256(chain_id | aux_nonce | 'm') mod
+n_aux_chains`, with the transpeer chain id fixed by §4.2 and the venue's
+chain id being its consensus id; `aux_nonce` and `n_aux_chains` come
+from the tag. The tree is built over the leaves in slot order with
+Keccak-256 over the concatenation of each pair, after a first step
+that, when the leaf count is not a power of two, pairs leaves from the
+end of the list until it is. The proof is verified by recomputing the
+root from the leaf, the sibling hashes and the slot and comparing with
+the tag (P2Pool `merkle.cpp`, `verify_merkle_proof`). A venue leaf is a
+share id; resolving it means obtaining that share (§6.5). A transpeer
 leaf is a blob hash; resolving it means obtaining the blob (§5).
 
 ### 6.5 Shares and the canonical fork
 
 For each venue whose share ids appear in resolved tags, fetch the share
 chain back through the weight window (§7) from any observer or
-transpeer. Verify each share: its proof-of-work meets its sidechain
-difficulty, its parent link is consistent, and its transpeer leaf, if
-present, is proven as in §6.4. The **canonical fork** of a venue is the
-chain containing the share id referenced by the most recent resolved
-tagged block for that venue; shares that are not ancestors of that share
-carry no weight. This is what stops a private fork of a real venue from
-passing as the real one.
+transpeer. A share's sidechain data (P2Pool `PoolBlock`, verified
+against v4.18) carries the miner's wallet keys, the parent and uncle
+ids, the sidechain height, difficulty and cumulative difficulty, the
+Merkle tree parameters and root, and a map from each merge-mined chain
+id to that chain's aux hash and difficulty. The share id is the hash of
+this data, so a transpeer commitment is read directly from the map and
+is bound by the share's proof-of-work with no Merkle proof. Verify each
+share: its proof-of-work over its hashing blob meets its sidechain
+difficulty, its parent link is consistent, and its map entry for the
+transpeer chain id, if present, names a blob. The **canonical fork** of
+a venue is the chain containing the share id referenced by the most
+recent resolved tagged block for that venue; shares that are not
+ancestors of that share carry no weight. This is what stops a private
+fork of a real venue from passing as the real one.
+
+**The observer protocol**, verified against v4.18: default P2P ports
+37889 (main), 37888 (mini) and 37890 (nano); a connecting peer must
+answer a handshake challenge with a Keccak preimage over the challenge,
+the consensus id and a salt whose last word times 10000 does not
+overflow 64 bits, about ten thousand hashes; message ids include
+`PEER_LIST_REQUEST` and `PEER_LIST_RESPONSE` (at most 16 peers per
+reply, rate-limited per peer, private and loopback addresses filtered),
+`BLOCK_REQUEST`, `BLOCK_RESPONSE`, `BLOCK_BROADCAST`,
+`BLOCK_BROADCAST_COMPACT` and `BLOCK_NOTIFY`. Share serialisation is in
+`pool_block_parser.inl`. Walking a venue's overlay is therefore many
+small peer-list requests over time rather than one bulk fetch.
 
 ### 6.6 Freshness
 
@@ -347,7 +445,13 @@ to be partly dead; the newcomer verifies reachability before use.
 
 ## 7. Weighting
 
-Let `W` be the weight window: 24 hours of a venue's canonical shares.
+Let `W` be the weight window: the venue's PPLNS window, up to 2160
+canonical shares, about six hours on main and mini at ten seconds per
+share and about eighteen on nano at thirty. P2Pool nodes keep shares
+for roughly twice the window before pruning, about twelve hours on
+main (verified against v4.18: prune distance twice the window plus the
+uncle depth, or four windows by age, whichever comes first), so a
+transpeer that wants a longer window archives shares itself.
 
 - **Share weight** `w(s)` is the share's verified difficulty.
 - **Blob weight** `w(b)` is the sum of `w(s)` over canonical shares in
@@ -429,7 +533,8 @@ nodes that do not apply it still accept the chain the policy produces.
   own store (seen answering within 7 days) or, for unknown entries,
   fail a probe with three attempts over 10 minutes; *bad* if the blob is
   unavailable 10 minutes after the share's timestamp; *bad* if the
-  publisher has committed more than 6 distinct blobs in 24 hours.
+  publisher has committed more than 6 distinct list bodies (§3.1) in 24
+  hours; period reissues of one body do not count.
   Verdicts are cached by blob hash for 6 hours. Live probing of
   known-good entries is forbidden, so that thousands of miners do not
   probe every listed transpeer every ten seconds.
@@ -467,7 +572,7 @@ extension adds nothing to that exposure.
 | Private fork of a real venue | not canonical; no weight |
 | Publishing garbage from an honest-sized wallet | weight equals the wallet's work; under §10, the wallet loses its reward |
 | Majority of a venue's hashrate | can dominate that venue's commitments; must also dominate the anchor chain's tagged blocks to pass coverage alone, which is a majority of all P2Pool hashrate |
-| Majority of the anchor chain's hashrate | out of scope; can corral the chain itself |
+| Majority of the anchor chain's hashrate | out of scope; can corral the chain itself. Not hypothetical: in August 2025 the Qubic project claimed a majority of Monero's hashrate and produced reorganisations reported at 6 and 18 blocks deep. During such an episode the tip is contested and the set of tagged blocks is shaped by whoever mines; the newcomer's freshness and cumulative-work rules still pick the chain the majority extends, which is the best any chain-anchored design can do. The clearnet defenses of `manuscript.md` §6 do not depend on the chain and keep working throughout |
 
 Residual risks: liveness (an attacker who is the newcomer's whole view
 can delay it, not mislead it); the header-verification sample (§6.2)
@@ -476,15 +581,26 @@ time; and the policy layer's verdicts are heuristics that can misfire on
 a genuinely flaky honest list, which the tolerances are set to make
 rare.
 
+**The price in hashrate, measured 2026-09-13** from the three observers'
+`pool_info` (sidechain difficulty over block time against Monero
+difficulty over 120 s): main 393 MH/s, 6.65 % of a 5.9 GH/s network;
+mini 25 MH/s, 0.42 %; nano 4.2 MH/s, 0.07 %; about 7.1 % together, down
+from a reported peak above 18 % in May 2025. Wallets in the windows:
+about 11,000 on main, 33,000 on mini, 5,500 on nano. Holding half of
+P2Pool's work is therefore about 210 MH/s, on the order of ten to twenty
+thousand current CPUs running continuously, and the corral collapses
+when they stop. The figure moves with adoption and should be re-read
+from the observers when quoted.
+
 ## 13. Sizes and performance
 
 | item | size or cost |
 |---|---|
 | list blob | ≤ 1024 bytes, typically ~140 for 20 entries |
-| blob database, one week | a few megabytes |
+| blob database, one week | one body per publisher per list version plus 8 bytes per 25-minute period: about 4 KB per publisher-week, so 40 MB if every one of P2Pool main's ~11,000 wallets published |
 | anchor headers, one year old checkpoint | ~26 MB, ~260k headers; proof-of-work sample per §6.2 |
 | coinbases, one week | ~10 MB, dominated by P2Pool payout transactions |
-| share chain, 24 hours per venue | ~8600 shares; parsing and one RandomX verification each |
+| share chain, one PPLNS window per venue | up to 2160 shares; parsing and one RandomX verification each |
 | challenge traffic | ≤ 8 small requests per transpeer per hour |
 
 ## 14. Compatibility and versioning
@@ -503,27 +619,66 @@ asked for.
 Blob version is the byte at offset 4. Readers ignore unknown versions.
 The chain id constant changes only with an incompatible blob format.
 
-## 15. Items to verify against P2Pool before implementation
+## 15. Verification status
 
-1. Whether P2Pool includes an aux leaf in the tag when the aux chain's
-   difficulty is never met, or only tracks solutions for it.
-2. The exact names and parameters of the merge-mining RPC methods and
-   the aux-block response fields.
-3. The maximum number of aux chains per node, and how the leaf index
-   and nonce are derived and exposed, which determines what `proof`
-   (§3.2) must contain.
-4. The observer protocol: handshake and its anti-abuse proof-of-work,
-   peer-list request, share broadcast and request messages, and share
-   serialisation, for each of main, mini and nano.
-5. Share retention on P2Pool nodes, which bounds how far back §6.5 can
-   fetch without transpeer relays.
-6. P2Pool's current share of Monero's hashrate, which sets the price in
-   §12.
-7. The encoding of the merge-mining tag in `tx_extra` and whether any
-   non-P2Pool software emits it on Monero today.
-8. For Route B: how the share format is versioned and activated, the
-   size limits on sidechain data, and whether P2Pool nodes would accept
-   a built-in probe of their peers' transpeer port as default behaviour.
+Checked on 2026-09-13 against the P2Pool source at v4.18 (commit
+`9bac5bd`) and the three observers' `pool_info`. Draft 0.1 listed these
+as assumptions; the text above was corrected where they were wrong.
+
+1. **Aux leaf inclusion: verified, with a wrinkle.** A chain is included
+   in every template whenever `get_params` succeeds, which requires a
+   nonzero difficulty and parameters younger than `EXPIRE_TIME` = 1800 s
+   (`merge_mining_client.h`, `merge_mining_client_json_rpc.cpp`,
+   `block_template.cpp`); meeting the difficulty only governs
+   `merge_mining_submit_solution`. The wrinkle: `last_updated` is set
+   only when `aux_hash` changes, so an unchanged job expires after 30
+   minutes. Hence the `period` field (§3.1) and the rotation rule
+   (§4.2). Re-check `get_params` before relying on the exact expiry.
+2. **RPC names and fields: verified** against `docs/MERGE_MINING.MD` and
+   the client: `merge_mining_get_chain_id`, `merge_mining_get_aux_block`
+   (`address`, `aux_hash`, `height`, `prev_id` → `aux_blob`, `aux_diff`,
+   `aux_hash`, optional `aux_height`/`aux_reward`/`aux_fees`; empty or
+   same-hash result means unchanged), `merge_mining_submit_solution`
+   (`aux_blob`, `aux_hash`, `blob`, `merkle_proof`, `path`, `seed_hash`
+   → `status`). Polling every 500 ms. Option `--merge-mine`.
+3. **Aux chains and proofs: verified.** No configured limit; the slot
+   assignment `SHA-256(id | nonce | 'm') mod n` with a brute-forced
+   nonce holds about 15 to 16 chains (`merkle.cpp`, `get_aux_slot`,
+   `find_aux_nonce`). `n_aux_chains` and `aux_nonce` are in the tag's
+   Merkle tree parameters, so a block-only verifier has them (§6.3);
+   the sibling hashes come to the sidecar in `submit_solution`, which is
+   why §4.2 sets a low difficulty. Shares also carry each chain's aux
+   hash explicitly in `m_mergeMiningExtra` (`pool_block.h`), so
+   share-level commitments need no proof (§6.5).
+4. **Observer protocol: verified** (`p2p_server.h`, `p2p_server.cpp`):
+   ports 37889/37888/37890; handshake challenge with Keccak and
+   `CHALLENGE_DIFFICULTY` = 10000 for the connecting side; `MessageId`
+   enum with `PEER_LIST_REQUEST`/`RESPONSE` (16 peers per reply,
+   rate-limited, filtered), `BLOCK_REQUEST`/`RESPONSE`/`BROADCAST`/
+   `BROADCAST_COMPACT`/`NOTIFY`; serialisation in `pool_block_parser.inl`.
+5. **Retention: verified.** Pruned beyond `2 × (window − 1) + 2 ×
+   UNCLE_BLOCK_DEPTH(3) + 120 / block_time + 1` shares, about 4337 on
+   main (≈ 12 h), or beyond four windows by age (`side_chain.cpp`,
+   `prune_old_blocks`). Window up to 2160 shares, `MAX_PPLNS_WINDOW_HOURS`
+   = 30. §7's window was reduced to the PPLNS window accordingly.
+6. **Hashrate: measured** (§12): main 6.65 %, mini 0.42 %, nano 0.07 %
+   of 5.9 GH/s; ~11,000 / 33,000 / 5,500 wallets in the windows.
+7. **Tag encoding: verified** (§6.3). Whether non-P2Pool software emits
+   the tag on Monero today is still unknown; the coverage rule treats
+   every tag as a venue, so a foreign tag counts as an unresolvable
+   venue and lowers coverage slightly rather than breaking anything.
+8. **Route B activation: partly verified.** Share versions are activated
+   by timestamp in the consensus parameters (v2 at 1679173200, v3 at
+   1728763200 on main); the sidechain data already has a 16-byte
+   `m_sidechainExtraBuf` (used by convention for software id and
+   version) and the per-chain `m_mergeMiningExtra` map with a fixed
+   entry format, so a Route B field would be a new entry in the
+   serialiser. Whether nodes would accept a built-in peer probe as
+   default behaviour is a question for the maintainer, not the code.
+9. **New: the donation route (§4.6) exists** behind
+   `WITH_MERGE_MINING_DONATION`, signed with the author's key,
+   undocumented in `COMMAND_LINE.MD`, enabled on the sending side with
+   `--adkf`.
 
 ## 16. Test plan
 
@@ -538,4 +693,7 @@ The chain id constant changes only with an incompatible blob format.
   grid. The expected result is a crossover in `q` near one half and
   independence from prefix count.
 - An integration test against a real P2Pool node on a private testnet
-  venue, exercising §4.2 and §6.5 end to end, once §15 is settled.
+  venue, exercising §4.2 and §6.5 end to end: the sidecar as a
+  `--merge-mine` target, the 500 ms poll, the 30-minute expiry and the
+  period rotation, a low `aux_diff` producing `submit_solution` calls
+  with proofs, and the observer handshake and peer-list walk.
