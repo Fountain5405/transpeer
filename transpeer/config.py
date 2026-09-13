@@ -115,6 +115,14 @@ class Config:
     # Free-text contact shown on GET / so a network operator who sees our
     # probes can reach us instead of reporting us.
     contact: str = ""
+    # Chain-anchored publication (docs/spec-chain-anchored-publication.md).
+    anchor_publish: bool = False
+    anchor_chain: str = "monero"
+    aux_rpc_bind: str = "127.0.0.1"
+    aux_rpc_port: int = 7338
+    aux_diff: int = 100000
+    anchor_min_age: float = 14.0   # days a transpeer must have been known (spec 4.1 rule 1)
+    anchor_max_new: float = 0.25   # share of entries allowed without a committed history (rule 5)
 
     def __post_init__(self):
         if not self.in_memory:
@@ -207,6 +215,27 @@ def parse_args() -> Config:
         "on the local daemon's peers. For residential lines and strict hosts.",
     )
     parser.add_argument(
+        "--anchor-publish", action="store_true",
+        help="Publish this node's curated transpeer list through a local "
+        "P2Pool node's merge-mining interface (point p2pool at "
+        "--merge-mine AUX_RPC_BIND:AUX_RPC_PORT WALLET). Default off.",
+    )
+    parser.add_argument("--anchor-chain", default="monero",
+                        help="Anchor chain name written into the list blob.")
+    parser.add_argument("--aux-rpc-bind", default="127.0.0.1",
+                        help="Bind address of the aux-chain JSON-RPC server P2Pool polls.")
+    parser.add_argument("--aux-rpc-port", type=int, default=7338,
+                        help="Port of the aux-chain JSON-RPC server.")
+    parser.add_argument(
+        "--aux-diff", type=int, default=100000,
+        help="aux_diff reported to P2Pool. Set it to the venue's minimum "
+        "share difficulty so every share is reported back with its proof.",
+    )
+    parser.add_argument("--anchor-min-age", type=float, default=14.0,
+                        help="Days a transpeer must have been known before it is published.")
+    parser.add_argument("--anchor-max-new", type=float, default=0.25,
+                        help="Largest share of published entries without a committed history.")
+    parser.add_argument(
         "--scan-idle-rate", type=float, default=0.0,
         help="Probes per second once --scan-target-known transpeers have "
         "answered (default 0: stop scanning).",
@@ -261,6 +290,13 @@ def parse_args() -> Config:
         scan_exclude=args.scan_exclude,
         scan_legacy=args.scan_legacy,
         contact=args.contact,
+        anchor_publish=args.anchor_publish,
+        anchor_chain=args.anchor_chain,
+        aux_rpc_bind=args.aux_rpc_bind,
+        aux_rpc_port=args.aux_rpc_port,
+        aux_diff=args.aux_diff,
+        anchor_min_age=args.anchor_min_age,
+        anchor_max_new=args.anchor_max_new,
         snapshot_interval=args.snapshot_interval,
     )
 

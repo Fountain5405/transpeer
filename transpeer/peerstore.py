@@ -86,6 +86,7 @@ class TranspeerEntry:
     # network -> True/False: did this transpeer's host answer on that
     # network's P2P port? Filled by the native probe under --native-vouchers.
     native: dict = field(default_factory=dict)
+    first_seen: int = 0
 
     @property
     def key(self) -> str:
@@ -97,6 +98,7 @@ class TranspeerEntry:
             "port": self.port,
             "networks": self.networks,
             "last_seen": self.last_seen,
+            "first_seen": self.first_seen,
         }
 
 
@@ -560,6 +562,8 @@ class PeerStore:
                     existing.networks = entry.networks
                 await self._save_transpeer(existing)
                 return False
+
+            entry.first_seen = entry.last_seen or int(time.time())
 
             bucket = self._bucket_of(entry.addr)
             if gossiped or self.config.bucketed:
