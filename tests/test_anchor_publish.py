@@ -133,9 +133,103 @@ async def test_curation_and_rotation():
     await store.close()
 
 
+async def test_aux_rpc():
+    from aiohttp import web
+    import aiohttp
+    from transpeer.anchor import CHAIN_ID
+    from transpeer.anchor.blob import blob_hash, decode_blob
+    from transpeer.anchor.blobdb import BlobDB
+    from transpeer.anchor.auxrpc import AuxRpcServer
+    from transpeer.anchor.merkle import (merkle_tree, merkle_root, merkle_proof, aux_slot,
+                                         find_aux_nonce, build_mm_tag)
+    from transpeer.anchor.monero import build_block_blob
+    from transpeer.anchor.publisher import Publisher
+    print("aux-chain JSON-RPC")
+    now = 2_000_000_000
+    old = now - 20 * 86400
+    cfg = Config(in_memory=True, no_verify=True, anchor_publish=True, aux_diff=12345)
+    store = PeerStore(cfg)
+    await store.init()
+    for i in range(1, 4):
+        await _add(store, f"4{i}.0.0.1", first_seen=old, answered=i)
+    db = BlobDB()
+    pub = Publisher(cfg, store, db, clock=lambda: now)
+    rpc = AuxRpcServer(pub, db, aux_diff=12345, clock=lambda: now)
+
+    runner = web.AppRunner(rpc.create_app())
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 17338)
+    await site.start()
+
+    async def call(method, params=None, rid="7"):
+        req = {"jsonrpc": "2.0", "id": rid, "method": method}
+        if params is not None:
+            req["params"] = params
+        async with aiohttp.ClientSession() as s:
+            async with s.post("http://127.0.0.1:17338/", json=req) as r:
+                return await r.json()
+
+    r = await call("merge_mining_get_chain_id")
+    check(r["id"] == "7" and r["jsonrpc"] == "2.0", "envelope echoes id")
+    check(r["result"]["chain_id"] == CHAIN_ID.hex() and r["result"]["ticker"] == "TPL", "chain id")
+    params = {"address": "WALLET", "aux_hash": "00" * 32, "height": 3_000_000, "prev_id": "11" * 32}
+    r = await call("merge_mining_get_aux_block", params)
+    res = r["result"]
+    check(set(res) == {"aux_blob", "aux_diff", "aux_hash"} and res["aux_diff"] == 12345, "first poll returns a job")
+    blob = bytes.fromhex(res["aux_blob"])
+    check(blob_hash(blob).hex() == res["aux_hash"], "aux_hash is sha256 of aux_blob")
+    check(len(decode_blob(blob).entries) == 3 and pub.address == "WALLET", "blob from curation; address remembered")
+    params["aux_hash"] = res["aux_hash"]
+    r = await call("merge_mining_get_aux_block", params)
+    check(r["result"] == {}, "unchanged hash -> empty result (P2Pool treats as no change)")
+    check(rpc.stats["get_aux_block"] == 2 and rpc.stats["changed"] == 1, "stats")
+    # Build a template whose coinbase tag commits to the aux hash and submit a solution.
+    aux_hash = bytes.fromhex(res["aux_hash"])
+    sidechain_id = hashlib.sha256(b"venue").digest()
+    ids = [sidechain_id, CHAIN_ID]
+    nonce = find_aux_nonce(ids)
+    leaves = [None, None]
+    leaves[aux_slot(sidechain_id, nonce, 2)] = hashlib.sha256(b"share").digest()
+    leaves[aux_slot(CHAIN_ID, nonce, 2)] = aux_hash
+    tree = merkle_tree(leaves)
+    proof, path = merkle_proof(tree, aux_hash)
+    tag = build_mm_tag(2, nonce, merkle_root(leaves))
+    extra = b"\x01" + bytes(32) + b"\x02\x04" + bytes(4) + tag
+    tmpl = build_block_blob(16, 16, now, b"\x11" * 32, 0, 3_000_000, extra)
+    sub = {"aux_blob": blob.hex(), "aux_hash": aux_hash.hex(), "blob": tmpl.hex(),
+           "merkle_proof": [p.hex() for p in proof], "path": path, "seed_hash": "22" * 32}
+    r = await call("merge_mining_submit_solution", sub)
+    check(r.get("result") == {"status": "accepted"}, "valid solution accepted")
+    check(len(pub.solutions) == 1 and pub.solutions[0].height == 3_000_000, "solution recorded")
+    recs = db.commitments(aux_hash)
+    check(len(recs) == 1 and recs[0].kind == "template" and recs[0].publisher == "WALLET"
+          and recs[0].proof == tuple(proof) and recs[0].path == path, "template commitment stored with proof")
+    check(db.get(aux_hash) == blob, "blob now in the database")
+    bad = dict(sub, path=path ^ 1)
+    r = await call("merge_mining_submit_solution", bad)
+    check("error" in r and rpc.stats["submit_rejected"] == 1, "wrong path rejected")
+    bad = dict(sub, aux_hash="ab" * 32)
+    r = await call("merge_mining_submit_solution", bad)
+    check("error" in r, "unknown aux_hash rejected")
+    # Rotation through the RPC: next period yields a new hash for the same body.
+    now += 1500
+    r = await call("merge_mining_get_aux_block", params)
+    check(r["result"]["aux_hash"] != res["aux_hash"]
+          and bytes.fromhex(r["result"]["aux_blob"])[22:] == blob[22:], "period rotation through RPC")
+    r = await call("no_such_method")
+    check(r["error"]["code"] == -32601, "unknown method")
+    async with aiohttp.ClientSession() as s:
+        async with s.post("http://127.0.0.1:17338/", data=b"{not json") as resp:
+            r = await resp.json()
+    check(r["error"]["code"] == -32700, "parse error")
+    await runner.cleanup()
+    await store.close()
+
+
 async def main():
     await test_config_and_first_seen()
     await test_curation_and_rotation()
+    await test_aux_rpc()
     print(f"\nResults: {passed} passed, {failed} failed")
     sys.exit(1 if failed else 0)
 
