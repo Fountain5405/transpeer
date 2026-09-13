@@ -394,8 +394,42 @@ Correction recorded here as well as in the manuscript: the 15-minute
 window gives the fresh node two query batches, not three; the third begins
 at the stop time.
 
+## Defenses against a colluding reporter majority (`run_defenses.sh`)
+
+Full tables in `docs/manuscript.md` §8.13 and §8.14; analysis in §9.6.
+Five seeds per cell, coordinated attackers, 15-minute windows unless
+stated. Wall-clock per results file at 30 workers: reserve5 198 min; reserve10 149 min; reserve5_h200 585 min; native_cheap 99 min; native_full 49 min.
+
+- **Hand-off reserve** (`results_reserve5.txt`, `results_reserve10.txt`;
+  50 honest, 1500 attackers). Without it, at 25 prefixes and above no
+  seed put an honest peer in front of the daemon. With `--handoff-reserve`
+  5 or 10, every seed did at 25, 50 and 100 prefixes (89, 88 and 92 %
+  attacker, i.e. 1 to 4 honest slots) and four of five at 200 (94 %).
+  K = 10 was identical to K = 5 seed by seed: picks are one per reporter
+  cluster and honest reporters form one or two. The reach is bounded by
+  the reporters the victim queried (the `unrepresented` column, 2 to 13
+  at 25 prefixes, 0 to 5 at 200).
+- **Reserve cost** (`results_reserve5_h200.txt`; 200 honest, 500
+  attackers, 60 min). At 8 prefixes, where rank gives the attacker
+  nothing, the reserve hands its cluster one slot (5 %) in every seed; at
+  16, about one slot on top of a share it partly held already.
+- **Native vouchers** (`results_native_cheap.txt`,
+  `results_native_full.txt`; 50 honest, 500 attackers, prefixes 6, 8,
+  25). Announce-only attacker: 0 % of the daemon's list in all 15 cells
+  under `bucketed_vouchers_native`, against 66 to 100 % without. Attacker
+  with a daemon port per address (`ATTACKER_NATIVE=1`): 74, 83 and 100 %,
+  matching plain voucher ranking. A cost transfer, not a bound.
+
+Runner additions: policies `bucketed_vouchers_reserve`,
+`bucketed_vouchers_native`, `bucketed_vouchers_native_reserve`; env
+`RESERVE=K` (default 5) and `ATTACKER_NATIVE=1` (scenario suffix
+`_anative`); CSV column `unrepresented`.
+
 ## Remaining follow-ups
 
+0. Reserve pick rule as per-bucket nomination (more honest slots under a
+   naive corral, larger foothold below the crossover); reserve at longer
+   windows; native vouchers with the plugin handshake.
 1. Honest counts beyond 200, to test whether the crossover keeps scaling.
    Needs a /15 scan range or a lower attacker bucket ceiling.
 2. Query batch size and interval as defense parameters; they set how fast

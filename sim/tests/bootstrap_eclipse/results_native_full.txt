@@ -1,0 +1,23 @@
+# Transpeer bootstrap_eclipse experiment
+# Honest: 50, fresh node starts at 300s, simulated time: 1200s, seed: 42
+# Attacker mode: coordinated, attacker start: 3s, seeds: 1 2 3 4 5
+# Attacker daemon port open: 1, hand-off reserve: 5
+# Machine: 64 threads, 251 GB RAM, parallelism: 30
+# Started: Sat 12 Sep 2026 04:11:28 PM UTC
+
+scenario,attackers,attacker_subnets,policy,seed,real_time_sec,run_mem_mb,store_total,store_attacker_pct,honest_known,buckets,queries_total,query_attacker_pct,peers_total,peer_attacker_pct,multi_voucher_pct,daemon_attacker_pct,top20_honest_max_vouchers,top20_attacker_min_vouchers,tried_total,tried_honest,snapshots,unrepresented,status
+A500_S6_bucketed_vouchers_native_coord_anative_s1,500,6,bucketed_vouchers_native,1,180,12788,68,26.5,50,56,40,20.0,544,18.4,39.7,75.0,13,6,0,0,14,0,ok
+A500_S6_bucketed_vouchers_native_coord_anative_s2,500,6,bucketed_vouchers_native,2,180,13731,69,26.1,50,57,40,17.5,548,18.2,38.7,70.0,9,6,0,0,14,0,ok
+A500_S6_bucketed_vouchers_native_coord_anative_s3,500,6,bucketed_vouchers_native,3,225,13608,68,26.5,50,56,40,22.5,485,20.6,40.4,85.0,8,6,0,0,14,0,ok
+A500_S6_bucketed_vouchers_native_coord_anative_s4,500,6,bucketed_vouchers_native,4,195,13523,68,26.5,50,56,40,20.0,523,19.1,44.0,70.0,11,6,0,0,14,0,ok
+A500_S6_bucketed_vouchers_native_coord_anative_s5,500,6,bucketed_vouchers_native,5,195,13375,69,26.1,50,57,40,27.5,472,21.2,41.7,70.0,12,6,0,0,14,0,ok
+A500_S8_bucketed_vouchers_native_coord_anative_s1,500,8,bucketed_vouchers_native,1,195,12719,74,32.4,50,58,40,27.5,512,19.5,39.5,90.0,13,8,0,0,14,0,ok
+A500_S8_bucketed_vouchers_native_coord_anative_s2,500,8,bucketed_vouchers_native,2,180,13337,75,32.0,50,59,40,17.5,552,18.1,38.2,60.0,13,6,0,0,14,0,ok
+A500_S8_bucketed_vouchers_native_coord_anative_s3,500,8,bucketed_vouchers_native,3,210,12595,74,32.4,50,58,40,27.5,509,19.6,41.1,95.0,9,8,0,0,14,0,ok
+A500_S8_bucketed_vouchers_native_coord_anative_s4,500,8,bucketed_vouchers_native,4,195,12747,75,32.0,50,59,40,27.5,440,22.7,44.8,85.0,12,8,0,0,14,0,ok
+A500_S8_bucketed_vouchers_native_coord_anative_s5,500,8,bucketed_vouchers_native,5,180,13063,75,32.0,50,59,40,30.0,522,19.2,39.1,85.0,14,8,0,0,14,0,ok
+A500_S25_bucketed_vouchers_native_coord_anative_s1,500,25,bucketed_vouchers_native,1,210,12979,125,60.0,50,75,40,40.0,517,19.3,36.4,100.0,0,14,0,0,14,0,ok
+A500_S25_bucketed_vouchers_native_coord_anative_s2,500,25,bucketed_vouchers_native,2,195,40251,126,59.5,50,76,40,35.0,458,21.8,38.9,100.0,0,11,0,0,14,0,ok
+A500_S25_bucketed_vouchers_native_coord_anative_s3,500,25,bucketed_vouchers_native,3,226,13538,125,60.0,50,75,40,50.0,417,24.0,39.8,100.0,0,16,0,0,14,0,ok
+A500_S25_bucketed_vouchers_native_coord_anative_s4,500,25,bucketed_vouchers_native,4,195,12798,126,59.5,50,76,40,40.0,434,23.0,45.6,100.0,0,14,0,0,14,0,ok
+A500_S25_bucketed_vouchers_native_coord_anative_s5,500,25,bucketed_vouchers_native,5,195,13814,126,59.5,50,76,40,57.5,379,26.4,42.0,100.0,0,16,0,0,14,0,ok

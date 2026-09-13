@@ -1,0 +1,58 @@
+# Transpeer bootstrap_eclipse experiment
+# Honest: 50, fresh node starts at 300s, simulated time: 1200s, seed: 42
+# Attacker mode: coordinated, attacker start: 3s, seeds: 1 2 3 4 5
+# Attacker daemon port open: 0, hand-off reserve: 10
+# Machine: 64 threads, 251 GB RAM, parallelism: 30
+# Started: Sat 12 Sep 2026 05:51:38 PM UTC
+
+scenario,attackers,attacker_subnets,policy,seed,real_time_sec,run_mem_mb,store_total,store_attacker_pct,honest_known,buckets,queries_total,query_attacker_pct,peers_total,peer_attacker_pct,multi_voucher_pct,daemon_attacker_pct,top20_honest_max_vouchers,top20_attacker_min_vouchers,tried_total,tried_honest,snapshots,unrepresented,status
+A1500_S6_bucketed_vouchers_coord_s1,1500,6,bucketed_vouchers,1,150,35256,68,26.5,50,56,40,27.5,533,18.8,37.1,80.0,11,6,0,0,14,0,ok
+A1500_S6_bucketed_vouchers_coord_s2,1500,6,bucketed_vouchers,2,150,35594,69,26.1,50,57,40,25.0,515,19.4,38.1,85.0,7,6,0,0,14,0,ok
+A1500_S6_bucketed_vouchers_coord_s3,1500,6,bucketed_vouchers,3,180,35030,68,26.5,50,56,40,27.5,544,18.4,40.1,85.0,11,6,0,0,14,0,ok
+A1500_S6_bucketed_vouchers_coord_s4,1500,6,bucketed_vouchers,4,165,35566,69,26.1,50,57,40,17.5,516,19.4,44.4,75.0,11,6,0,0,14,0,ok
+A1500_S6_bucketed_vouchers_coord_s5,1500,6,bucketed_vouchers,5,150,35512,69,26.1,50,57,40,25.0,527,19.0,41.0,75.0,12,6,0,0,14,0,ok
+A1500_S6_bucketed_vouchers_reserve_coord_s1,1500,6,bucketed_vouchers_reserve,1,150,35265,68,26.5,50,56,40,27.5,533,18.8,37.1,80.0,11,6,0,0,14,0,ok
+A1500_S6_bucketed_vouchers_reserve_coord_s2,1500,6,bucketed_vouchers_reserve,2,151,35574,69,26.1,50,57,40,22.5,584,17.1,37.5,70.0,9,6,0,0,14,0,ok
+A1500_S6_bucketed_vouchers_reserve_coord_s3,1500,6,bucketed_vouchers_reserve,3,180,34762,68,26.5,50,56,40,30.0,510,19.6,41.0,80.0,10,6,0,0,14,0,ok
+A1500_S6_bucketed_vouchers_reserve_coord_s4,1500,6,bucketed_vouchers_reserve,4,165,35548,69,26.1,50,57,40,17.5,516,19.4,44.4,75.0,11,6,0,0,14,0,ok
+A1500_S6_bucketed_vouchers_reserve_coord_s5,1500,6,bucketed_vouchers_reserve,5,150,35131,69,26.1,50,57,40,25.0,527,19.0,41.0,75.0,12,6,0,0,14,0,ok
+A1500_S25_bucketed_vouchers_coord_s1,1500,25,bucketed_vouchers,1,165,35705,125,60.0,50,75,40,47.5,455,22.0,36.9,100.0,0,15,0,0,14,0,ok
+A1500_S25_bucketed_vouchers_coord_s2,1500,25,bucketed_vouchers,2,150,34163,126,59.5,50,76,40,52.5,397,25.2,40.8,100.0,0,17,0,0,14,0,ok
+A1500_S25_bucketed_vouchers_coord_s3,1500,25,bucketed_vouchers,3,180,35503,125,60.0,50,75,40,45.0,478,20.9,36.0,100.0,0,15,0,0,14,0,ok
+A1500_S25_bucketed_vouchers_coord_s4,1500,25,bucketed_vouchers,4,150,35566,126,59.5,50,76,40,50.0,363,27.5,43.8,100.0,0,18,0,0,14,0,ok
+A1500_S25_bucketed_vouchers_coord_s5,1500,25,bucketed_vouchers,5,165,35206,126,59.5,50,76,40,52.5,403,24.8,44.9,100.0,0,17,0,0,14,0,ok
+A1500_S25_bucketed_vouchers_reserve_coord_s1,1500,25,bucketed_vouchers_reserve,1,165,35751,125,60.0,50,75,40,40.0,438,22.8,34.7,90.0,9,15,0,0,14,9,ok
+A1500_S25_bucketed_vouchers_reserve_coord_s2,1500,25,bucketed_vouchers_reserve,2,150,34095,126,59.5,50,76,40,47.5,426,23.5,37.3,95.0,9,15,0,0,14,9,ok
+A1500_S25_bucketed_vouchers_reserve_coord_s3,1500,25,bucketed_vouchers_reserve,3,180,35550,125,60.0,50,75,40,52.5,407,24.6,42.0,90.0,5,17,0,0,14,7,ok
+A1500_S25_bucketed_vouchers_reserve_coord_s4,1500,25,bucketed_vouchers_reserve,4,151,35610,126,59.5,50,76,40,50.0,409,24.4,40.6,90.0,9,17,0,0,14,11,ok
+A1500_S25_bucketed_vouchers_reserve_coord_s5,1500,25,bucketed_vouchers_reserve,5,165,35154,126,59.5,50,76,40,45.0,510,19.6,34.7,80.0,9,15,0,0,14,13,ok
+A1500_S50_bucketed_vouchers_coord_s1,1500,50,bucketed_vouchers,1,165,35649,200,75.0,50,100,40,67.5,320,31.2,44.1,100.0,0,25,0,0,14,0,ok
+A1500_S50_bucketed_vouchers_coord_s2,1500,50,bucketed_vouchers,2,150,34496,201,74.6,50,101,40,57.5,378,26.5,39.2,100.0,0,21,0,0,14,0,ok
+A1500_S50_bucketed_vouchers_coord_s3,1500,50,bucketed_vouchers,3,180,35519,200,75.0,50,100,40,72.5,304,32.9,38.8,100.0,0,27,0,0,14,0,ok
+A1500_S50_bucketed_vouchers_coord_s4,1500,50,bucketed_vouchers,4,165,35691,200,75.0,50,100,40,57.5,380,26.3,35.3,100.0,0,19,0,0,14,0,ok
+A1500_S50_bucketed_vouchers_coord_s5,1500,50,bucketed_vouchers,5,165,34808,201,74.6,50,101,40,72.5,268,37.3,52.2,100.0,0,24,0,0,14,0,ok
+A1500_S50_bucketed_vouchers_reserve_coord_s1,1500,50,bucketed_vouchers_reserve,1,150,35628,200,75.0,50,100,40,52.5,441,22.7,36.7,90.0,9,19,0,0,14,10,ok
+A1500_S50_bucketed_vouchers_reserve_coord_s2,1500,50,bucketed_vouchers_reserve,2,150,35480,201,74.6,50,101,40,60.0,335,29.9,39.4,90.0,7,20,0,0,14,8,ok
+A1500_S50_bucketed_vouchers_reserve_coord_s3,1500,50,bucketed_vouchers_reserve,3,180,35315,200,75.0,50,100,40,65.0,374,26.7,43.3,90.0,8,24,0,0,14,9,ok
+A1500_S50_bucketed_vouchers_reserve_coord_s4,1500,50,bucketed_vouchers_reserve,4,165,35604,200,75.0,50,100,40,57.5,368,27.2,40.8,85.0,6,21,0,0,14,8,ok
+A1500_S50_bucketed_vouchers_reserve_coord_s5,1500,50,bucketed_vouchers_reserve,5,165,34672,201,74.6,50,101,40,70.0,343,29.2,40.2,90.0,7,25,0,0,14,8,ok
+A1500_S100_bucketed_vouchers_coord_s1,1500,100,bucketed_vouchers,1,165,35611,348,85.9,49,149,40,77.5,232,43.1,48.3,100.0,0,29,0,0,14,0,ok
+A1500_S100_bucketed_vouchers_coord_s2,1500,100,bucketed_vouchers,2,180,35329,351,85.5,50,151,40,75.0,249,40.2,49.0,100.0,0,28,0,0,14,0,ok
+A1500_S100_bucketed_vouchers_coord_s3,1500,100,bucketed_vouchers,3,210,35484,343,86.9,45,145,40,90.0,202,49.5,54.5,100.0,0,33,0,0,14,0,ok
+A1500_S100_bucketed_vouchers_coord_s4,1500,100,bucketed_vouchers,4,165,35815,350,85.4,50,151,40,72.5,249,40.2,52.2,100.0,0,26,0,0,14,0,ok
+A1500_S100_bucketed_vouchers_coord_s5,1500,100,bucketed_vouchers,5,180,34373,350,85.7,50,150,40,72.5,314,31.8,41.1,100.0,0,27,0,0,14,0,ok
+A1500_S100_bucketed_vouchers_reserve_coord_s1,1500,100,bucketed_vouchers_reserve,1,165,35285,348,85.9,49,149,40,77.5,232,43.1,48.3,95.0,3,29,0,0,14,2,ok
+A1500_S100_bucketed_vouchers_reserve_coord_s2,1500,100,bucketed_vouchers_reserve,2,180,35887,350,85.7,49,150,40,82.5,214,46.7,51.9,95.0,4,31,0,0,14,4,ok
+A1500_S100_bucketed_vouchers_reserve_coord_s3,1500,100,bucketed_vouchers_reserve,3,210,34719,347,86.5,47,147,40,90.0,202,49.5,54.5,95.0,2,33,0,0,14,2,ok
+A1500_S100_bucketed_vouchers_reserve_coord_s4,1500,100,bucketed_vouchers_reserve,4,165,34578,347,86.5,47,147,40,77.5,254,39.4,52.0,85.0,4,30,0,0,14,6,ok
+A1500_S100_bucketed_vouchers_reserve_coord_s5,1500,100,bucketed_vouchers_reserve,5,180,35494,350,85.7,50,150,40,77.5,293,34.1,45.1,90.0,6,28,0,0,14,7,ok
+A1500_Sspread_bucketed_vouchers_coord_s1,1500,200,bucketed_vouchers,1,225,36092,500,90.0,50,250,40,77.5,286,35.0,43.7,100.0,0,30,0,0,14,0,ok
+A1500_Sspread_bucketed_vouchers_coord_s2,1500,200,bucketed_vouchers,2,225,35596,500,91.0,44,243,40,90.0,147,68.0,70.1,100.0,0,33,0,0,14,0,ok
+A1500_Sspread_bucketed_vouchers_coord_s3,1500,200,bucketed_vouchers,3,255,34760,500,92.4,38,238,40,90.0,193,51.8,54.4,100.0,0,35,0,0,14,0,ok
+A1500_Sspread_bucketed_vouchers_coord_s4,1500,200,bucketed_vouchers,4,225,35017,500,90.4,47,248,40,77.5,252,39.7,46.0,100.0,0,31,0,0,14,0,ok
+A1500_Sspread_bucketed_vouchers_coord_s5,1500,200,bucketed_vouchers,5,225,35479,500,92.2,38,234,40,92.5,148,67.6,68.9,100.0,0,36,0,0,14,0,ok
+A1500_Sspread_bucketed_vouchers_reserve_coord_s1,1500,200,bucketed_vouchers_reserve,1,225,35579,500,90.6,47,247,40,87.5,201,49.8,54.7,90.0,4,30,0,0,14,4,ok
+A1500_Sspread_bucketed_vouchers_reserve_coord_s2,1500,200,bucketed_vouchers_reserve,2,210,35962,500,91.0,44,244,40,90.0,163,61.3,63.2,95.0,2,36,0,0,14,2,ok
+A1500_Sspread_bucketed_vouchers_reserve_coord_s3,1500,200,bucketed_vouchers_reserve,3,270,34680,500,91.8,41,238,40,90.0,180,55.6,56.7,95.0,2,36,0,0,14,2,ok
+A1500_Sspread_bucketed_vouchers_reserve_coord_s4,1500,200,bucketed_vouchers_reserve,4,226,34643,500,90.6,46,247,40,77.5,252,39.7,46.0,90.0,5,31,0,0,14,5,ok
+A1500_Sspread_bucketed_vouchers_reserve_coord_s5,1500,200,bucketed_vouchers_reserve,5,225,35251,500,92.4,38,235,40,95.0,134,74.6,74.6,100.0,0,36,0,0,14,0,ok

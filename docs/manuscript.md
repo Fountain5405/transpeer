@@ -721,6 +721,79 @@ fakes took the daemon's list in every seed, and at six prefixes the
 attacker reached the list of an established node in two of five seeds
 without the table and one with it, the same persistence seen in §8.10.
 
+### 8.13 Hand-off reserve against a corral (`results_reserve5.txt`, `results_reserve10.txt`, `results_reserve5_h200.txt`)
+
+Five seeds. Fifty honest transpeers, 1500 coordinated attackers, a
+15-minute window, prefixes from 6 to 200, with `--handoff-reserve` at
+K = 5 and K = 10 against plain voucher ranking. Top-20 attacker share as
+mean [range]; in parentheses, the seeds in which at least one honest peer
+reached the daemon's list. "Unrepresented" is the number of reporter
+buckets with no peer in the ranked head before the reserve pass, which
+under a corral is the number of honest reporters the victim had heard
+from.
+
+| prefixes | vouchers only | K = 5 | K = 10 | unrepresented, K = 5 |
+|---------:|:-------------:|:-----:|:------:|:--------------------:|
+| 6   | 80 % [75–85] (5/5)  | 76 % [70–80] (5/5) | 76 % (5/5) | 0.0 |
+| 25  | 100 % (0/5)         | 89 % [80–95] (5/5) | 89 % (5/5) | 9.8 [7–13] |
+| 50  | 100 % (0/5)         | 88 % [85–90] (5/5) | 89 % [85–90] (5/5) | 8.2 [6–10] |
+| 100 | 100 % (0/5)         | 92 % [85–95] (5/5) | 92 % (5/5) | 4.4 [2–7] |
+| 200 (spread) | 100 % (0/5) | 94 % [90–100] (4/5) | 94 % (4/5) | 2.6 [0–5] |
+
+Without the reserve, from 25 prefixes up, no seed put a single honest
+peer in front of the daemon. With it, every seed did at 25, 50 and 100
+prefixes, and four of five at 200, at one to four slots of twenty. That
+is the property the reserve was built for: one honest connection is
+enough for the daemon to see the real chain (§9.6). Two limits are
+visible in the table. K = 10 produced rows identical to K = 5, seed by
+seed, because a pick covers every bucket that vouched for it and the
+honest reporters form one or two clusters, so the reserve is exhausted
+after a couple of picks. And the reserve can only represent reporters
+the victim has actually heard from: with 40 queries spread bucket-uniform
+over 250 buckets, the victim heard from 2 to 13 honest reporters at 25
+prefixes and 0 to 5 at 200, and the seed that heard none stayed at 100
+percent. The bottleneck is the query budget, not the reserve size.
+
+The cost side, measured at 200 honest transpeers, 500 attackers and a
+60-minute window, where rank alone gives a small attacker little:
+
+| prefixes | vouchers only | K = 5 |
+|---------:|:-------------:|:-----:|
+| 8  | 0 % (0/5 seeds with any attacker)    | 5 % [5–5] |
+| 16 | 13 % [0–45]                          | 16 % [5–40] |
+
+At 8 prefixes the attacker's eight buckets are unrepresented, its fakes
+carry eight vouchers, above the two-voucher gate, and the reserve hands
+its cluster exactly one slot in every seed. At 16 the reserve adds about
+one slot to a share the attacker was already winning by rank in some
+seeds. One slot is the reserve's floor price for any cluster of two or
+more prefixes below the crossover.
+
+### 8.14 Native vouchers against cheap and full attackers (`results_native_cheap.txt`, `results_native_full.txt`)
+
+Five seeds. Fifty honest transpeers, 500 coordinated attackers, a
+15-minute window, prefixes 6, 8 and 25. Under `--native-vouchers` a
+report counts first by vouchers from transpeers whose host answered a
+TCP probe on the network's daemon port. The cheap attacker announces and
+serves fakes but opens no daemon port; the full attacker
+(`--attacker-native`) opens one per address.
+
+| prefixes | vouchers only | native, cheap attacker | native, full attacker |
+|---------:|:-------------:|:----------------------:|:---------------------:|
+| 6  | 66 % [55–85]  | 0 % (0/5) | 74 % [70–85] |
+| 8  | 85 % [75–95]  | 0 % (0/5) | 83 % [60–95] |
+| 25 | 100 %         | 0 % (0/5) | 100 %        |
+
+The cheap attacker's fakes carry no native voucher and rank below every
+honest peer that has one; the daemon's list was entirely honest in all
+fifteen cells. The full attacker matched plain voucher ranking within
+seed noise. The defense is a cost transfer and nothing more: it removes
+the announce-only version of the attack and prices the other one at a
+daemon per address. The simulated check is a TCP connect, which a
+listener satisfies; a deployment should use the network plugin's
+protocol handshake, which the verifier already supports for networks the
+node runs, so that the price is a real daemon.
+
 ---
 
 ## 9. Analysis
@@ -798,6 +871,35 @@ running real nodes passes it, and at that point the attack is a
 daemon-level eclipse. Per-address rate limits: the adversary has thousands
 of addresses by construction.
 
+### 9.6 The reserve is proportional representation; native vouchers are a cost transfer
+
+Voucher ranking is winner-takes-all: past the crossover the attacker
+holds every slot. The hand-off reserve changes the rule for the last K
+slots to something like proportional representation among reporter
+clusters, and the measured effect is exactly what that predicts. Under a
+corral every honest reporter is unrepresented in the ranked head by
+construction, so the reserve reaches honest peers in every seed where
+the victim heard from any (§8.13); the attacker can dilute it only by
+adding reporter buckets that vouch for nothing in the head, which costs
+prefixes and buys a share, never the whole list; and below the
+crossover the same symmetry hands a small attacker cluster one slot,
+which the two-voucher gate keeps at one. One honest slot is enough in
+principle, because a daemon that connects to one real peer syncs the
+heavier chain and reorganises away from a fork; the reserve's job is to
+make a total corral impossible rather than to win the list. Its reach
+is bounded by the reporters the victim has queried, which is the query
+budget of §9.2 again, and which the proposal of §12 removes by letting a
+newcomer read every publisher's list at once.
+
+Native vouchers do not change any crossover. They split the attacker
+population in two: the announce-only attacker, whom they eliminate at
+every prefix count tested, and the attacker who runs a daemon per
+address, whom they leave exactly where voucher ranking left them
+(§8.14). The defense is worth having because the cheap attack is the
+one most likely to be tried, and because the price it sets, one real
+daemon per vouching address, is the same price a corral has to pay
+anyway.
+
 ---
 
 ## 10. Threats to validity
@@ -821,6 +923,11 @@ of addresses by construction.
   files were run at 30 workers and their seed-1 rows therefore differ
   from the single-seed files, run at 60. Results headers record the
   worker count; a replica is a different seed at the same worker count.
+- **Reserve and native windows.** §8.13 at 50 honest is a 15-minute
+  window, where the victim has heard from few reporters; longer windows
+  would raise the number of unrepresented honest buckets and the honest
+  slots with them, and were not run. The 200-honest cost cells are at 60
+  minutes. §8.14 is 15 minutes at three prefix counts.
 - **No peer verification.** Fakes are never probed. In production the
   verifier removes unreachable entries and contracts the source's
   budget; our numbers are therefore an upper bound on the attacker's
@@ -856,15 +963,18 @@ of addresses by construction.
 
 ## 11. Future work
 
-0. Two defenses against a colluding reporter majority are implemented and
-   under measurement (`run_defenses.sh`): a hand-off reserve
-   (`--handoff-reserve K`, the last K daemon slots go to peers vouched by
-   reporter buckets absent from the ranked head, gated on two vouchers)
-   and native vouchers (`--native-vouchers`, reports from transpeers
-   whose host answers on the network's daemon port rank first). Results
-   will be §8.13 and §8.14. Then: bootstrap latency under the etiquette
-   scan profile of §3.7 (every run so far used `--scan-legacy`), and the
-   first-contact eclipse window that profile opens.
+0. Follow-ups to §8.13 and §8.14. The reserve's pick rule takes one
+   peer per reporter cluster; a per-bucket nomination rule would lift
+   the honest slots from about two to up to K under a naive corral, at
+   the price of up to min(K, S) slots for a below-crossover attacker
+   instead of one, and is a design choice to measure rather than a fix.
+   The reserve at longer windows. Native vouchers with the plugin
+   handshake rather than a TCP connect. Then bootstrap latency under the
+   etiquette scan profile of §3.7 (every run so far used `--scan-legacy`)
+   and the first-contact window that profile opens, which the coverage
+   rule of §12 would close if adopted; and the venue-oracle experiment
+   of the specification's test plan, which would put a number on the
+   crossover in hashrate.
 1. Honest counts beyond 200, to test whether the crossover keeps scaling
    linearly. Needs a `/15` scan range or a smaller attacker bucket
    ceiling, since 200 honest buckets plus attackers already fill most of
@@ -890,7 +1000,7 @@ of addresses by construction.
 
 This section is a proposal, not a result. Nothing in it has been built
 or measured. It is recorded here because the analysis in §9 and the
-defenses under measurement for §8.13 and §8.14 end at a limit, and the
+defenses of §8.13 and §8.14 end at a limit, and the
 proposal is the only design found so far that moves the limit rather
 than the price.
 The specification is `docs/spec-chain-anchored-publication.md`; this
@@ -1030,9 +1140,9 @@ attacker who is a newcomer's entire first view can still delay it, only
 not mislead it. The policy layer's verdicts are heuristics with
 tolerances, and they bite only once aware miners are a majority.
 Networks without a P2Pool-like venue need main-chain commitments and
-therefore miner cooperation. And it is unmeasured; §11 item 0 lists the
-venue-oracle experiment that would put a number on the crossover in
-hashrate.
+therefore miner cooperation. And it is unmeasured; the venue-oracle
+experiment in the specification's test plan and §11 item 0 would put a
+number on the crossover in hashrate.
 
 ---
 
@@ -1059,7 +1169,10 @@ post-rebase values (old to new: `de02f26`→`83b3596`, `b769837`→`d9f09e4`,
 | `f5e575d` | `--tried-table`, Shadow seed, `--attacker-start`, replicas, `run_followups.sh`; protocol section |
 | `47feb92` | §8.9 single-seed follow-ups (uptime, 200 honest, tried table) |
 | `9d7a474` | `run_replicas.sh` |
-| results commit following `9d7a474` | five-seed replicas (§8.10 to §8.12), `aggregate_seeds.py`, this revision |
+| `6bdf442` | five-seed replicas (§8.10 to §8.12), `aggregate_seeds.py`, determinism caveat |
+| `85191de` | `--handoff-reserve`, `--native-vouchers`, scanning etiquette (§3.7), `run_defenses.sh` |
+| `e24a708`, `983490f` | `docs/defenses-explained.md`; §12 and `docs/spec-chain-anchored-publication.md` |
+| results commit following `983490f` | §8.13, §8.14, §9.6, this revision |
 | `2b16d6a`, `bcd5169` | adaptive handshake PoW and its experiment (§8.2), earlier |
 | `f98736a` | attacker_ratio (§8.3), earlier |
 
@@ -1077,11 +1190,13 @@ with the interpretation at the time. Runs:
     ATTACKER_MODE=coordinated ... run_experiment.sh                        # §8.6-8.8
     sim/tests/bootstrap_eclipse/run_followups.sh                           # §8.9, single-seed §8.10-8.12
     sim/tests/bootstrap_eclipse/run_replicas.sh                            # §8.10-8.12, five seeds
+    sim/tests/bootstrap_eclipse/run_defenses.sh                            # §8.13, §8.14
     python sim/tests/bootstrap_eclipse/aggregate_seeds.py <results_file>   # mean and range over seeds
 
 Unit checks: `tests/test_two_nodes.py` (24, real EquiX, default policy)
-and `tests/test_bucketed.py` (31, both policies, vouchers and the tried
-table, no network).
+`tests/test_bucketed.py` (47: both policies, vouchers, the tried table,
+the reserve and native vouchers, no network) and `tests/test_scanner.py`
+(19: exclusions, rate selection, pacing).
 
 ---
 
@@ -1105,6 +1220,11 @@ table, no network).
 | 17 | An established node under the current policy loses fewer honest transpeers to a flood than a fresh one (6 to 12 vs 18 to 28) | measured, five seeds | §8.12 vs §8.4, §8.7 |
 | 19 | A six-prefix attacker against 50 honest transpeers keeps 15 to 35 percent of the daemon's list after two hours of victim uptime | measured, four of five seeds | §8.10 |
 | 20 | A fake that answers queries can become tried; at most one per cell, in 5 of 40 cells | measured, five seeds | §8.12 |
+| 21 | Under voucher ranking a coordinated attacker with 25 or more prefixes against 50 honest holds 100 % of the daemon's list at 15 minutes; the hand-off reserve puts 1 to 4 honest peers on it in 5/5 seeds at 25, 50 and 100 prefixes and 4/5 at 200 | measured, five seeds | §8.13 |
+| 22 | Reserve size beyond the number of honest reporter clusters adds nothing: K = 10 rows identical to K = 5 | measured, five seeds | §8.13 |
+| 23 | The reserve's reach is bounded by reporters the victim has queried; at 200 prefixes one seed in five heard none and stayed at 100 % | measured, five seeds | §8.13 |
+| 24 | The reserve's floor cost is one slot (5 %) to any below-crossover attacker cluster of two or more prefixes (200 honest, 8 prefixes, 5/5 seeds) | measured, five seeds | §8.13 |
+| 25 | Native vouchers reduce an announce-only attacker to 0 % of the daemon's list at 6, 8 and 25 prefixes (15/15 cells) and leave an attacker with a daemon port per address where voucher ranking left it | measured, five seeds | §8.14 |
 | 18 | Entry crossover near 150 and majority near 250 prefixes at 1000 honest transpeers | extrapolated | §9.2 |
 | 12 | Query share under bucketing lags the store formula early and converges | hypothesis | §8.4 query table; not rerun longer |
 | 13 | Verification would remove unreachable fakes within minutes | hypothesis | not simulated |
