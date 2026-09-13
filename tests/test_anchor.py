@@ -179,11 +179,35 @@ def test_merkle():
     check(parse_tx_extra_mm_tag(tag[:-1]) is None, "truncated tag -> None")
 
 
+def test_monero_block():
+    from transpeer.anchor.monero import parse_block_blob, build_block_blob
+    from transpeer.anchor.merkle import build_mm_tag, parse_tx_extra_mm_tag
+    print("monero block blob")
+    tag = build_mm_tag(2, 5, b"\x42" * 32)
+    extra = b"\x01" + bytes(32) + b"\x02\x04\x00\x00\x00\x00" + tag
+    prev = b"\x11" * 32
+    blob = build_block_blob(16, 16, 1_700_000_000, prev, 0xDEADBEEF, 3_000_000, extra,
+                            tx_hashes=[b"\x22" * 32, b"\x33" * 32])
+    h = parse_block_blob(blob)
+    check((h.major, h.minor, h.timestamp) == (16, 16, 1_700_000_000), "header varints")
+    check(h.prev_id == prev and h.nonce == 0xDEADBEEF, "prev_id and nonce")
+    check(h.height == 3_000_000, "height from miner tx input")
+    check(h.tx_extra == extra and h.n_tx_hashes == 2, "tx_extra and tx count")
+    check(parse_tx_extra_mm_tag(h.tx_extra).root == b"\x42" * 32, "tag reachable")
+    check(blob[-64:] == b"\x22" * 32 + b"\x33" * 32, "tx hashes at the end")
+    try:
+        parse_block_blob(blob[:40])
+        check(False, "truncated blob raises")
+    except ValueError:
+        check(True, "truncated blob raises")
+
+
 def main():
     test_keccak()
     test_varint()
     test_blob()
     test_merkle()
+    test_monero_block()
     print(f"\nResults: {passed} passed, {failed} failed")
     sys.exit(1 if failed else 0)
 
