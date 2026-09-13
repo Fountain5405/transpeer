@@ -117,6 +117,13 @@ For each commitment a sidecar has verified it keeps:
 | `timestamp` | the share or block timestamp |
 | `proof` | for `block`: the sibling hashes from the tag's Merkle tree; the slot, aux-chain count and nonce are recomputed from the chain id and the tag (§6.4). For `share`: empty, because the share's own sidechain data carries the aux hash explicitly (§6.5) |
 
+A fourth kind, `template`, is recorded only by a publisher, from
+P2Pool's `merge_mining_submit_solution`: the proof is against the tag
+in the Monero block template P2Pool was mining, before the share or
+block that carries it has been observed. Template records carry no
+weight (§7) and are upgraded to `share` or `block` when the reader
+resolves the corresponding share or block.
+
 ### 3.3 Blob database
 
 Every transpeer keeps a table keyed by blob hash: the blob bytes and the
@@ -746,8 +753,9 @@ observer handshake and peer-list walk, and share parsing from
 mode, which would make this test take minutes rather than a testnet
 sync, is unverified.
 
-**Byte-level fixtures.** Slice 1 carries test vectors for the merge
-mining tag and the Merkle tree taken from P2Pool's own tests
-(`tests/src/merkle_tests.cpp`, `merge_mining_tests.cpp` at v4.18) so
-that the Python implementation is checked against P2Pool's, not
-against itself.
+**Byte-level fixtures.** Slice 1 pins the aux-slot and tree-parameter
+vectors from P2Pool's `tests/src/merkle_tests.cpp` at v4.18 and the
+Merkle algorithm transcribed from `src/merkle.cpp`; P2Pool's own
+Python merge-mining stub, `tests/src/mm_server.py`, fixed the JSON
+shapes. A live tagged Monero block is the remaining cross-check and
+belongs to slice 3, where the coinbase fetch exists.

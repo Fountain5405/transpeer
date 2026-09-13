@@ -54,3 +54,29 @@ so the scanner is built to be a bootstrap mechanism, not a steady state:
 Expect some reports anyway. A single TCP connect to a monitored host is
 enough for an automated complaint, and no rate is low enough for every
 sensor. Set `--contact`, answer complaints, and keep the exclude list.
+
+## Publishing through P2Pool
+
+With `--anchor-publish` (default off; nothing changes without it) the
+node runs a small JSON-RPC server that P2Pool treats as a merge-mined
+chain. The node's curated transpeer list (a blob of at most 64
+addresses) is hashed, and the hash rides as an aux leaf in every share
+the P2Pool node builds and in every Monero block it finds. Start
+P2Pool with `--merge-mine 127.0.0.1:7338 <WALLET>`.
+
+- **Aux RPC.** `--aux-rpc-bind` sets the interface the aux server
+  listens on and `--aux-rpc-port` (default 7338) the port; `--aux-diff`
+  sets the minimum share difficulty accepted, and should be set to the
+  venue's own minimum.
+- **Anchor policy.** `--anchor-chain` selects the target chain (default
+  `monero`); `--anchor-min-age` (default 14 days) and `--anchor-max-new`
+  (default 0.25) bound how much of a published list can be recently
+  added.
+- **Blob endpoints.** The blob is served at `/blob/{hash}` and indexed
+  at `/blobs/index`. Readers of these commitments (the newcomer path)
+  are not yet implemented; see the specification's §17 for the build
+  order.
+
+See
+[docs/spec-chain-anchored-publication.md](docs/spec-chain-anchored-publication.md)
+for the protocol.
