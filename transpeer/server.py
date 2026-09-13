@@ -77,7 +77,8 @@ class LoadTracker:
 
 class TranspeerServer:
     def __init__(self, config: Config, store: PeerStore, node_id: str, start_time: float,
-                 network_names: list[str] | None = None):
+                 network_names: list[str] | None = None,
+                 blobdb=None, publisher=None):
         self.config = config
         self.store = store
         self.node_id = node_id
@@ -85,6 +86,8 @@ class TranspeerServer:
         self.network_names = network_names or config.networks
         self._rate_limits: dict[str, list[float]] = defaultdict(list)
         self.load_tracker = LoadTracker()
+        self.blobdb = blobdb
+        self.publisher = publisher
 
     def _check_rate_limit(self, addr: str) -> bool:
         now = time.time()
@@ -229,10 +232,52 @@ class TranspeerServer:
             "transpeers": [e.to_dict() for e in entries],
         })
 
+    # -- chain-anchored publication, spec §5 -------------------------------
+    # Content-addressed data: no handshake proof-of-work, rate limit only.
+
+    def _anchor_ready(self) -> bool:
+        return self.blobdb is not None or self.publisher is not None
+
+    async def handle_blob(self, request: web.Request) -> web.Response:
+        if not self._anchor_ready():
+            return web.json_response({"error": "anchor not configured"}, status=404)
+        if not self._check_rate_limit(request.remote):
+            return web.json_response({"error": "rate limited"}, status=429)
+        try:
+            h = bytes.fromhex(request.match_info["hash"])
+            if len(h) != 32:
+                raise ValueError
+        except ValueError:
+            return web.json_response({"error": "bad hash"}, status=400)
+        blob = self.publisher.lookup(h) if self.publisher else None
+        if blob is None and self.blobdb is not None:
+            blob = self.blobdb.get(h)
+        if blob is None:
+            return web.json_response({"error": "unknown blob"}, status=404)
+        return web.Response(body=blob, content_type="application/octet-stream")
+
+    async def handle_blobs_index(self, request: web.Request) -> web.Response:
+        if not self._anchor_ready():
+            return web.json_response({"error": "anchor not configured"}, status=404)
+        if not self._check_rate_limit(request.remote):
+            return web.json_response({"error": "rate limited"}, status=429)
+        try:
+            since = int(request.query.get("since", "0"))
+            limit = max(1, min(int(request.query.get("limit", "500")), 500))
+        except ValueError:
+            return web.json_response({"error": "bad query"}, status=400)
+        rows = self.blobdb.index_since(since, limit) if self.blobdb is not None else []
+        blobs = [{"hash": h.hex(), "first_seen": fs, "commitments": [c.to_dict() for c in cs]}
+                 for h, fs, cs in rows]
+        next_since = rows[-1][1] if len(rows) == limit else None
+        return web.json_response({"blobs": blobs, "next_since": next_since})
+
     def create_app(self) -> web.Application:
         app = web.Application()
         app.router.add_get("/transpeer", self.handle_transpeer)
         app.router.add_get("/", self.handle_root)
         app.router.add_get("/peers/{network}", self.handle_peers)
         app.router.add_get("/transpeers", self.handle_transpeers)
+        app.router.add_get("/blob/{hash}", self.handle_blob)
+        app.router.add_get("/blobs/index", self.handle_blobs_index)
         return app

@@ -226,10 +226,71 @@ async def test_aux_rpc():
     await store.close()
 
 
+async def test_blob_endpoints():
+    import aiohttp
+    from aiohttp import web
+    from transpeer.server import TranspeerServer
+    from transpeer.anchor.blob import blob_hash, encode_blob
+    from transpeer.anchor.blobdb import BlobDB, Commitment
+    from transpeer.anchor.publisher import Publisher
+    print("blob endpoints")
+    now = 2_000_000_000
+    cfg = Config(in_memory=True, no_verify=True, anchor_publish=True, port=17337, bind="127.0.0.1")
+    store = PeerStore(cfg)
+    await store.init()
+    db = BlobDB()
+    pub = Publisher(cfg, store, db, clock=lambda: now)
+    await _add(store, "50.0.0.1", first_seen=now - 20 * 86400, answered=4)
+    pub.refresh()
+    h_issued, b_issued = pub.current()
+    b_db = encode_blob("monero", 5, [("51.0.0.1", 7337)])
+    db.add(b_db, Commitment(blob_hash(b_db), "share", "v", "s1", "w", 10, now - 50), now - 40)
+    srv = TranspeerServer(cfg, store, "test_anchor", time.time(), network_names=["monero"],
+                          blobdb=db, publisher=pub)
+    runner = web.AppRunner(srv.create_app())
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 17337)
+    await site.start()
+    base = "http://127.0.0.1:17337"
+    async with aiohttp.ClientSession() as s:
+        async with s.get(f"{base}/blob/{h_issued.hex()}") as r:
+            body = await r.read()
+            check(r.status == 200 and body == b_issued and r.content_type == "application/octet-stream",
+                  "issued blob served as bytes")
+        async with s.get(f"{base}/blob/{blob_hash(b_db).hex()}") as r:
+            check(r.status == 200 and await r.read() == b_db, "database blob served")
+        async with s.get(f"{base}/blob/{'ab' * 32}") as r:
+            check(r.status == 404, "unknown hash 404")
+        async with s.get(f"{base}/blob/zz") as r:
+            check(r.status == 400, "malformed hash 400")
+        async with s.get(f"{base}/blobs/index?since=0") as r:
+            j = await r.json()
+            check(r.status == 200 and [b["hash"] for b in j["blobs"]] == [blob_hash(b_db).hex()]
+                  and j["blobs"][0]["commitments"][0]["ref"] == "s1", "index lists committed blobs only")
+        async with s.get(f"{base}/blobs/index?since={now}") as r:
+            j = await r.json()
+            check(j["blobs"] == [] and j["next_since"] is None, "index since now is empty")
+    await runner.cleanup()
+    # Unconfigured server answers 404 on both routes.
+    srv2 = TranspeerServer(cfg, store, "test_plain", time.time(), network_names=["monero"])
+    runner = web.AppRunner(srv2.create_app())
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 17339)
+    await site.start()
+    async with aiohttp.ClientSession() as s:
+        async with s.get("http://127.0.0.1:17339/blob/" + "00" * 32) as r:
+            check(r.status == 404, "no anchor: /blob 404")
+        async with s.get("http://127.0.0.1:17339/blobs/index") as r:
+            check(r.status == 404, "no anchor: /blobs/index 404")
+    await runner.cleanup()
+    await store.close()
+
+
 async def main():
     await test_config_and_first_seen()
     await test_curation_and_rotation()
     await test_aux_rpc()
+    await test_blob_endpoints()
     print(f"\nResults: {passed} passed, {failed} failed")
     sys.exit(1 if failed else 0)
 
