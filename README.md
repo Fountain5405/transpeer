@@ -11,6 +11,11 @@ Cross compatability, because all you gotta do is write a bash script to dump a d
 But basically, we create a common protocol for p2p networks to share their IP lists with each other,
 such that a brute force of IP space is more likely to yield a connection that can provide IP lists of potential peers. 
 
+The Sybil and eclipse defenses (bucketing, vouchers, tried table, hand-off
+reserve, native vouchers) are explained with an analogy in
+[docs/defenses-explained.md](docs/defenses-explained.md); the measured
+record is [docs/manuscript.md](docs/manuscript.md).
+
 
 ## Scanning etiquette and blocklist risk
 
