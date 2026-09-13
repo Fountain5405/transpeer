@@ -14,7 +14,11 @@ such that a brute force of IP space is more likely to yield a connection that ca
 The Sybil and eclipse defenses (bucketing, vouchers, tried table, hand-off
 reserve, native vouchers) are explained with an analogy in
 [docs/defenses-explained.md](docs/defenses-explained.md); the measured
-record is [docs/manuscript.md](docs/manuscript.md).
+record is [docs/manuscript.md](docs/manuscript.md). A proposed extension
+that anchors published transpeer lists to P2Pool's proof-of-work, with
+no change to Monero or P2Pool, is specified in
+[docs/spec-chain-anchored-publication.md](docs/spec-chain-anchored-publication.md)
+and argued in the manuscript's §12.
 
 
 ## Scanning etiquette and blocklist risk

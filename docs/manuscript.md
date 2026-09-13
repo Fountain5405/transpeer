@@ -1,11 +1,11 @@
 # Bucketed selection and voucher counting against Sybil eclipse of a cross-network peer-discovery overlay
 
 **Status**: working draft, living document. Every number in this file traces
-to a results file and a commit listed in §12. Claims are tagged in the
-ledger in §13 as *measured*, *extrapolated* or *hypothesis*. Citations
+to a results file and a commit listed in §13. Claims are tagged in the
+ledger in §14 as *measured*, *extrapolated* or *hypothesis*. Citations
 marked `[verify]` are from memory and must be checked before submission.
 
-Branch `bootstrap-eclipse` at the time of writing; see §12 for commits.
+Branch `bootstrap-eclipse` at the time of writing; see §13 for commits.
 
 ---
 
@@ -886,7 +886,157 @@ of addresses by construction.
 
 ---
 
-## 12. Reproducibility
+## 12. Proposed extension: chain-anchored publication
+
+This section is a proposal, not a result. Nothing in it has been built
+or measured. It is recorded here because the analysis in §9 and the
+defenses under measurement for §8.13 and §8.14 end at a limit, and the
+proposal is the only design found so far that moves the limit rather
+than the price.
+The specification is `docs/spec-chain-anchored-publication.md`; this
+section gives the reasoning.
+
+### 12.1 The limit
+
+Every defense in §6 rests on one scarce resource: address diversity. An
+adversary with more distinct prefixes than the honest population has,
+for discovery purposes, become the network (§9.3). The hand-off reserve
+keeps a few honest peers on the daemon's list past that point, but only
+among reporters the victim has actually queried, and at two hundred
+prefixes and fifteen minutes that was a handful (§8.13). Two further
+facts sharpen the limit. A move to an anonymity network such as I2P
+removes prefixes altogether, since a destination has no street, and
+with them every measured defense except native vouchers. And a corral
+is internally consistent: from inside an attacker's world every check
+passes, because every check compares data the attacker supplied against
+other data the attacker supplied. What is missing is a resource the
+attacker cannot mint, and a yardstick from outside the attacker's world.
+
+### 12.2 The design
+
+Proof-of-work on the network's own chain supplies both, and P2Pool
+supplies the way to reach it without changing anything.
+
+- **Publication is mining.** A transpeer operator who mines on P2Pool
+  runs a sidecar that poses as a merge-mined aux chain. P2Pool's
+  existing merge-mining support then carries the hash of the operator's
+  curated transpeer list as an aux leaf in every share the operator's
+  node produces and in every Monero block it finds. The leaf is bound at
+  mining time by the share's proof-of-work; nothing is signed after the
+  fact and nothing can be equivocated. Monero's consensus, monerod,
+  P2Pool and the mining software are all untouched. The specification
+  also gives a second route, a P2Pool share-format change that puts the
+  field in every share (§12.5).
+- **Blobs live beside their hashes.** Every transpeer keeps a
+  content-addressed table: the list bytes and the hash that names them,
+  plus the shares and blocks in which the hash was committed. The chain
+  is the index; the overlay is the storage; a row verifies itself.
+  Nothing but hashes ever reaches the ledger, and only transpeer
+  addresses, which are public servers, are ever listed.
+- **Weight is work.** A transpeer's weight is the verified difficulty
+  of the shares whose leaves commit to blobs listing it, summed across
+  every P2Pool sidechain, with no per-venue quota. A venue the attacker
+  creates and mines alone is worth exactly the attacker's work.
+- **The yardstick.** To show a fresh tip, an attacker must show the
+  real Monero chain. Its coinbases carry the merge-mining tags of every
+  block P2Pool found, so a newcomer can read, from data the attacker
+  cannot forge, what fraction of tagged blocks the venues it can see
+  account for. Below half, it is in a corner and keeps discovering.
+  This also replaces the scanner's stop condition of §3.7: a node stops
+  knocking when it can see most of the mining, not when three doors
+  have opened, which closes the first-contact window recorded there.
+- **Faithfulness is testable.** Because blobs are content-addressed,
+  any node can ask any transpeer for any committed blob and check the
+  answer. A transpeer that cannot serve what others can is withholding,
+  and is ranked out. Withholding, the one attack the yardstick could
+  not attribute, becomes a per-node verdict.
+- **Garbage costs its publisher.** Optionally, P2Pool nodes run by
+  transpeer operators refuse to build on shares from a wallet whose
+  committed list failed a tolerant, cached, store-based check. With an
+  aware majority of a sidechain's hashrate, such shares are orphaned and
+  the wallet forfeits its reward. A share carrying no commitment is
+  never judged, so miners who do not run transpeer are unaffected.
+
+### 12.3 Why P2Pool rather than the main chain
+
+Publication rights follow the work, and on P2Pool the work is spread
+across everyone. A home CPU solo-mining Monero finds a block about once
+a year, so a design anchored to main-chain blocks hands publication to
+a handful of pool operators. The same CPU finds a P2Pool share every few
+days on the main sidechain and every few hours on the mini and nano
+sidechains. The published set is therefore the union of thousands of
+independently curated lists from thousands of independent operators,
+weighted by CPU-time on an ASIC-resistant hash: the honest transpeer
+population of §7, but with a weighting resource the attacker cannot
+mint. Multiple sidechains add resilience and publisher diversity; the
+no-quota rule is what keeps them from adding attack surface. And the
+aggregation has already happened when the newcomer arrives: it reads
+every publisher's list from the whole window in one pass, which removes
+the query-budget bottleneck that limited the reserve.
+
+### 12.4 Security argument
+
+| adversary | outcome | binding constraint |
+|---|---|---|
+| addresses or prefixes, no mining | cannot publish | work |
+| private venue, own hashrate | worth its work; yardstick exposes the sliver | anchor-chain tags |
+| whole world of attacker nodes | coverage fails; newcomer keeps discovering | anchor-chain tags |
+| withholding while showing the real chain | attributed per node | content addressing |
+| stale tip, private fork of a real venue | rejected | freshness, canonical-fork rule |
+| garbage from a real wallet | weight of its work; reward forfeited under the policy layer | mining policy |
+| majority of one sidechain | dominates that venue; must also dominate tagged blocks overall | all P2Pool hashrate |
+| majority of Monero | out of scope | consensus |
+
+Every row reduces to the same threshold: to corral a newcomer the
+attacker must find more than half of the Monero blocks that P2Pool
+finds, continuously, and lose the corral the moment it stops. That
+threshold is the same for every network that carries the anchor, and it
+is independent of prefix count.
+
+### 12.5 Costs and dependencies
+
+The engineering is entirely in the sidecar: an aux-chain RPC server on
+the publishing side; an observer client for each sidechain, verification
+of Monero headers from the release checkpoint with RandomX in light
+mode, coinbase Merkle proofs and tag parsing on the reading side; the
+blob database and its endpoints; weighting, coverage, challenges; and
+optionally the policy hook. Header verification for a year-old
+checkpoint is a good fraction of an hour on a small machine, reduced by
+sampling. The design depends on facts about P2Pool's merge-mining and
+P2P interfaces that are stated from memory and listed for verification
+in the specification, and on P2Pool's share of Monero's hashrate, which
+sets the price and should be looked up rather than quoted.
+
+The no-change route has an early-adoption weakness worth stating: the
+honest weight behind published lists is the hashrate of miners who run
+a sidecar, so an attacker must beat the participants, not the venue,
+and while participants are a few percent of P2Pool that is cheap. The
+second route in the specification closes the gap by changing P2Pool's
+share format so that every share carries the field, with P2Pool filling
+it by default from a built-in probe of its own peers' transpeer port,
+which is the daemon-peer path executed by P2Pool itself. Under that
+route the honest weight is the venue's whole hashrate from the first
+day, availability in the window is provided by the sidechain itself,
+and the price is a sidechain fork coordinated through a P2Pool release.
+The two routes compose: the first is the proof of concept and the
+second is what to ask the maintainer for.
+
+### 12.6 What it does not solve
+
+Discovery inherits the anchor chain's security and no more: for a chain
+that can be 51-percented cheaply, the anchor is exactly as weak, and the
+clearnet defenses of §6 remain the ones doing the work there. An
+attacker who is a newcomer's entire first view can still delay it, only
+not mislead it. The policy layer's verdicts are heuristics with
+tolerances, and they bite only once aware miners are a majority.
+Networks without a P2Pool-like venue need main-chain commitments and
+therefore miner cooperation. And it is unmeasured; §11 item 0 lists the
+venue-oracle experiment that would put a number on the crossover in
+hashrate.
+
+---
+
+## 13. Reproducibility
 
 Repository: `github.com/Fountain5405/transpeer`. All work is on `master`.
 On 2026-09-11 the `bootstrap-eclipse` branch was rebased onto
@@ -935,7 +1085,7 @@ table, no network).
 
 ---
 
-## 13. Claims ledger
+## 14. Claims ledger
 
 | # | claim | status | evidence |
 |---|-------|--------|----------|
@@ -988,7 +1138,7 @@ table, no network).
   with the five-seed revision.
 - The 2026-09-11 rebase rewrote the eclipse commit hashes. Every hash in
   this document was updated to the post-rebase value; the mapping is in
-  §12.
+  §13.
 - §7 and the contributor notes stated that two runs of one config are
   identical. That holds only at a fixed worker count; the seed-1 rows of
   the five-seed files (30 workers) differ from the single-seed files (60
