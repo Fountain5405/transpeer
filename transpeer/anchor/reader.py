@@ -399,6 +399,11 @@ class Reader:
                     pass
         return stored
 
+    async def gossip_entry(self, entry) -> int:
+        """Gossip against a queried TranspeerEntry, for use as the client's
+        after_query callback."""
+        return await self.gossip(entry.addr, entry.port)
+
     async def _gossip_row(self, addr: str, port: int, row: dict):
         try:
             h = bytes.fromhex(row["hash"])

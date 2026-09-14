@@ -43,6 +43,8 @@ class Node:
         self.publisher = None
         self.auxrpc = None
         self._anchor_saved = (0, 0)
+        # Chain-anchored reading (--anchor-read); built in run().
+        self.reader = None
         for spec in config.networks:
             try:
                 net = get_network(spec)
@@ -85,10 +87,50 @@ class Node:
                      self.blobdb.blob_count(), self.config.aux_rpc_bind,
                      self.config.aux_rpc_port, self.config.aux_diff)
 
+        if self.config.anchor_read:
+            from .anchor.blobdb import BlobDB
+            from .anchor.fetch import AnchorClient
+            from .anchor.powhash import PowUnavailable, backend_for
+            from .anchor.reader import Reader, venues_from_config
+            from .anchor.stores import AnchorStore, ShareStore, venue_dir
+            if self.blobdb is None:
+                anchor_blobs_path = self.config.data_dir / "anchor_blobs.json"
+                self.blobdb = (
+                    BlobDB() if self.config.in_memory else BlobDB.load(anchor_blobs_path)
+                )
+                self._anchor_path = anchor_blobs_path
+            self._anchor_store = AnchorStore(
+                None if self.config.in_memory else self.config.data_dir / "anchor_chain.json"
+            )
+            self._anchor_store.load()
+            self._share_stores = {}
+            for venue in venues_from_config(self.config):
+                store = ShareStore(
+                    venue,
+                    None if self.config.in_memory
+                    else venue_dir(self.config.data_dir, venue),
+                )
+                store.load()
+                self._share_stores[venue] = store
+            anchor_client = AnchorClient(self.config)
+            try:
+                pow_backend = backend_for(self.config)
+            except PowUnavailable as e:
+                log.error("%s", e)
+                raise SystemExit(2) from e
+            self.reader = Reader(
+                self.config, self.store, self.blobdb, self._anchor_store,
+                self._share_stores, anchor_client, pow_backend,
+            )
+            self.scanner._idle_fn = lambda: self.reader.bootstrapped
+            self.client.after_query = self.reader.gossip_entry
+
         self.server = TranspeerServer(
             self.config, self.store, self.node_id, self.start_time,
             network_names=list(self._networks.keys()),
             blobdb=self.blobdb, publisher=self.publisher,
+            anchor_store=self._anchor_store if self.config.anchor_read else None,
+            share_stores=self._share_stores if self.config.anchor_read else None,
         )
 
         try:
@@ -124,6 +166,7 @@ class Node:
                 self._candidate_loop(),
                 self._snapshot_loop(),
                 self._anchor_loop(),
+                self._reader_loop(),
             )
         finally:
             await self.store.close()
@@ -323,4 +366,28 @@ class Node:
                         self._anchor_saved = state
             except Exception:  # noqa: BLE001
                 log.exception("anchor loop")
+            await asyncio.sleep(60)
+
+    def _reader_sources(self) -> list:
+        """Live transpeers first, then the rest, up to 5, as (addr, port)."""
+        entries = self.store.get_transpeers()
+        alive = [e for e in entries if e.alive]
+        rest = [e for e in entries if not e.alive]
+        ordered = alive + rest
+        return [(e.addr, e.port) for e in ordered[:5]]
+
+    async def _reader_loop(self):
+        """Sync the reader against known transpeers: immediately, then
+        every 60 seconds."""
+        if self.reader is None:
+            return
+        while True:
+            try:
+                await self.reader.sync(self._reader_sources())
+                if not self.config.in_memory:
+                    self._anchor_store.save()
+                    if self.publisher is None:
+                        self.blobdb.save(self._anchor_path)
+            except Exception:  # noqa: BLE001
+                log.exception("reader loop")
             await asyncio.sleep(60)

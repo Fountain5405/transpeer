@@ -926,6 +926,33 @@ async def test_query_batch_bucketed_anchor_read():
         await store_off.close()
 
 
+async def test_node_wiring_read():
+    import aiohttp
+    from transpeer.config import Config
+    from transpeer.node import Node
+    print("node wiring (reader)")
+    cfg = Config(in_memory=True, no_verify=True, anchor_read=True, anchor_sim_pow=True,
+                 anchor_checkpoint="0:" + "00" * 32, port=17354, scan_rate=4.0,
+                 networks=[])
+    node = Node(cfg)
+    task = asyncio.create_task(node.run())
+    try:
+        await asyncio.sleep(1.0)
+        check(node.reader is not None, "reader built")
+        check(node.scanner.current_rate() == 4.0, "cold rate while not bootstrapped")
+        async with aiohttp.ClientSession() as s:
+            async with s.get("http://127.0.0.1:17354/anchor/monero/headers") as r:
+                j = await r.json()
+                check(r.status == 200 and j.get("headers") == [] and j.get("tip") is None,
+                      "anchor headers endpoint served by the node")
+    finally:
+        task.cancel()
+        try:
+            await task
+        except (asyncio.CancelledError, Exception):  # noqa: BLE001
+            pass
+
+
 if __name__ == "__main__":
     test_index_cursor()
     test_monero_hashing()
@@ -939,5 +966,6 @@ if __name__ == "__main__":
     asyncio.run(test_reader_hostile_fork())
     asyncio.run(test_store_tags_ranking())
     asyncio.run(test_query_batch_bucketed_anchor_read())
+    asyncio.run(test_node_wiring_read())
     print(f"\n{passed} passed, {failed} failed")
     sys.exit(1 if failed else 0)

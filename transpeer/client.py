@@ -42,9 +42,10 @@ class HandshakeProofCache:
 
 
 class TranspeerClient:
-    def __init__(self, config: Config, store: PeerStore):
+    def __init__(self, config: Config, store: PeerStore, after_query=None):
         self.config = config
         self.store = store
+        self.after_query = after_query
         self._handshake_cache = HandshakeProofCache()
         # Every request identifies the probe: protocol, project URL, and
         # the operator's opt-out contact if set.
@@ -256,4 +257,9 @@ class TranspeerClient:
             await self.store.add_transpeer(tp, gossiped=True)
         if new_transpeers:
             log.info("Got %d transpeers from %s", len(new_transpeers), entry.addr)
+        if self.after_query:
+            try:
+                await self.after_query(updated)
+            except Exception:  # noqa: BLE001 — guards a loop callback
+                log.exception("after_query")
         return True

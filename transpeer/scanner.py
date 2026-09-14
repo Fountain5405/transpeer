@@ -129,12 +129,13 @@ def random_ip_in_cidr(cidr: str) -> str:
 
 class Scanner:
     def __init__(self, config: Config, store: PeerStore, client: TranspeerClient,
-                 node_id: str = ""):
+                 node_id: str = "", idle_fn=None):
         self.config = config
         self.store = store
         self.client = client
         self._running = False
         self._node_id = node_id
+        self._idle_fn = idle_fn
         self.interval = SCAN_INTERVAL
         self._exclude = [] if config.scan_legacy else load_exclusions(config.scan_exclude)
         self._idle = None  # last logged mode, to log transitions once
@@ -183,7 +184,7 @@ class Scanner:
         batch, so a node whose live transpeers all vanish starts scanning
         again by itself."""
         live = self.store.live_transpeer_count()
-        idle = live >= self.config.scan_target_known
+        idle = self._idle_fn() if self._idle_fn else live >= self.config.scan_target_known
         if idle != self._idle:
             self._idle = idle
             log.info("Scan mode: %s (%d live transpeers)",
