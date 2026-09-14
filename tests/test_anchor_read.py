@@ -954,6 +954,93 @@ async def test_node_wiring_read():
             pass
 
 
+async def test_challenges():
+    print("faithfulness challenges (spec §9)")
+    from aiohttp import web
+    from transpeer.config import Config
+    from transpeer.peerstore import PeerStore, TranspeerEntry
+    from transpeer.server import TranspeerServer
+    from transpeer.anchor.blob import blob_hash
+    from transpeer.anchor.fetch import AnchorClient
+    from transpeer.anchor.challenge import Challenger
+
+    def make_commit(h):
+        return Commitment(h, "share", "v", "r", "pub", 10, 1_700_000_000)
+
+    blob_a = encode_blob("monero", 100, [("20.0.0.1", 7337)])
+    blob_b = encode_blob("monero", 101, [("20.0.0.2", 7337)])
+    hash_a, hash_b = blob_hash(blob_a), blob_hash(blob_b)
+
+    good_db = BlobDB()
+    good_db.add(blob_a, make_commit(hash_a), now=1_700_000_000)
+    good_db.add(blob_b, make_commit(hash_b), now=1_700_000_000)
+    empty_db = BlobDB()
+
+    cfg = Config(in_memory=True, no_verify=True)
+    store = PeerStore(cfg)
+    await store.init()
+    await store.add_transpeer(TranspeerEntry("127.0.0.1", 17355, alive=True, uptime=1000))
+    await store.add_transpeer(TranspeerEntry("127.0.0.1", 17356, alive=True, uptime=1000))
+
+    good_srv = TranspeerServer(cfg, store, "good", time.time(),
+                               network_names=["monero"], blobdb=good_db)
+    good_runner = web.AppRunner(good_srv.create_app())
+    await good_runner.setup()
+    await web.TCPSite(good_runner, "127.0.0.1", 17355).start()
+
+    bad_srv = TranspeerServer(cfg, store, "bad", time.time(),
+                              network_names=["monero"], blobdb=empty_db)
+    bad_runner = web.AppRunner(bad_srv.create_app())
+    await bad_runner.setup()
+    await web.TCPSite(bad_runner, "127.0.0.1", 17356).start()
+
+    class ReaderStub:
+        def __init__(self, hashes):
+            self.hashes = hashes
+
+        def verified_hashes(self, min_age):
+            return list(self.hashes)
+
+    reader = ReaderStub([hash_a, hash_b])
+    client = AnchorClient(cfg)
+    clock_box = [3600.0]
+    challenger = Challenger(store, reader, client, clock=lambda: clock_box[0])
+
+    try:
+        for _ in range(3):
+            await challenger.round()
+            clock_box[0] += 3600
+
+        good = store.get_transpeer("127.0.0.1", 17355)
+        bad = store.get_transpeer("127.0.0.1", 17356)
+        check(bad.unfaithful is True, "404 node marked unfaithful after repeat failures")
+        check(good.unfaithful is False, "good node stays faithful")
+        check(challenger.lost == set(), "no lost hashes yet")
+
+        # A third hash nobody serves: both fail it -> lost, no new mark
+        hash_c = hashlib.sha256(b"nobody-has-this").digest()
+        reader.hashes = [hash_a, hash_b, hash_c]
+        await challenger.round()
+        clock_box[0] += 3600
+        check(hash_c in challenger.lost, "hash failed by every challenged transpeer is lost")
+        good = store.get_transpeer("127.0.0.1", 17355)
+        check(good.unfaithful is False,
+              "lost hash's failure counts against nobody: good node still faithful")
+
+        # Advance 24h with the bad node now serving everything it used to 404 on.
+        empty_db.add(blob_a, make_commit(hash_a), now=1_700_000_000)
+        empty_db.add(blob_b, make_commit(hash_b), now=1_700_000_000)
+        clock_box[0] += 86400
+        await challenger.round()
+        bad = store.get_transpeer("127.0.0.1", 17356)
+        check(bad.unfaithful is False,
+              "24h without a failure clears the unfaithful mark")
+    finally:
+        await good_runner.cleanup()
+        await bad_runner.cleanup()
+        await store.close()
+
+
 if __name__ == "__main__":
     test_index_cursor()
     test_monero_hashing()
@@ -968,5 +1055,6 @@ if __name__ == "__main__":
     asyncio.run(test_store_tags_ranking())
     asyncio.run(test_query_batch_bucketed_anchor_read())
     asyncio.run(test_node_wiring_read())
+    asyncio.run(test_challenges())
     print(f"\n{passed} passed, {failed} failed")
     sys.exit(1 if failed else 0)

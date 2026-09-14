@@ -147,6 +147,7 @@ class TranspeerClient:
                         networks=data.get("networks", []),
                         last_seen=int(time.time()),
                         node_id=data.get("node_id", ""),
+                        uptime=data.get("uptime", 0),
                     )
         except (aiohttp.ClientError, asyncio.TimeoutError, ValueError):
             return None

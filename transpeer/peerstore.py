@@ -95,6 +95,12 @@ class TranspeerEntry:
     # failures (unfaithful). Both default off; set by the reader.
     published: bool = False
     unfaithful: bool = False
+    # Seconds the transpeer reports as its own uptime (spec §9: a
+    # transpeer syncing for under 10 minutes is not challenged). Filled
+    # by probe_transpeer from the /transpeer response; never persisted
+    # or put on the wire (it's the other node's self-report, re-fetched
+    # on every probe).
+    uptime: int = 0
 
     @property
     def key(self) -> str:
@@ -619,6 +625,7 @@ class PeerStore:
             existing = self._transpeers.get(entry.key)
             if existing:
                 existing.last_seen = max(existing.last_seen, entry.last_seen)
+                existing.uptime = entry.uptime
                 if entry.networks:
                     existing.networks = entry.networks
                 await self._save_transpeer(existing)

@@ -57,6 +57,10 @@ class Publisher:
         for e in self.store.get_transpeers():
             if is_reserved(e.addr):
                 continue
+            # 6. Faithfulness (spec §9): entries marked unfaithful by
+            # repeat challenge failures are never curated.
+            if getattr(e, "unfaithful", False):
+                continue
             # 1. History: old enough, has answered, and reachable now (a
             # body may change early only because an entry died).
             if e.first_seen <= 0 or now - e.first_seen < min_age or e.answered < 1 or not e.alive:
@@ -82,7 +86,6 @@ class Publisher:
             new = [e for e in chosen if not self.db.has_body_entry(e.addr, e.port)]
             allow = int(self.config.anchor_max_new * len(chosen))
             chosen = sorted(cont + new[:allow], key=lambda e: -e.answered)
-        # 6. Faithfulness (spec §9): not available until slice 3 (challenges).
         chosen = sorted(chosen, key=lambda e: -e.answered)[:MAX_ENTRIES]
         return sorted(((e.addr, e.port) for e in chosen),
                       key=lambda a: (int(ipaddress.IPv4Address(a[0])), a[1]))

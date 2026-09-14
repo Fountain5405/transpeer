@@ -45,6 +45,8 @@ class Node:
         self._anchor_saved = (0, 0)
         # Chain-anchored reading (--anchor-read); built in run().
         self.reader = None
+        self.anchor_client = None
+        self.challenger = None
         for spec in config.networks:
             try:
                 net = get_network(spec)
@@ -112,7 +114,7 @@ class Node:
                 )
                 store.load()
                 self._share_stores[venue] = store
-            anchor_client = AnchorClient(self.config)
+            self.anchor_client = AnchorClient(self.config)
             try:
                 pow_backend = backend_for(self.config)
             except PowUnavailable as e:
@@ -120,10 +122,12 @@ class Node:
                 raise SystemExit(2) from e
             self.reader = Reader(
                 self.config, self.store, self.blobdb, self._anchor_store,
-                self._share_stores, anchor_client, pow_backend,
+                self._share_stores, self.anchor_client, pow_backend,
             )
             self.scanner._idle_fn = lambda: self.reader.bootstrapped
             self.client.after_query = self.reader.gossip_entry
+            from .anchor.challenge import Challenger
+            self.challenger = Challenger(self.store, self.reader, self.anchor_client)
 
         self.server = TranspeerServer(
             self.config, self.store, self.node_id, self.start_time,
@@ -167,6 +171,7 @@ class Node:
                 self._snapshot_loop(),
                 self._anchor_loop(),
                 self._reader_loop(),
+                *([self._challenge_loop()] if self.reader is not None else []),
             )
         finally:
             await self.store.close()
@@ -391,3 +396,14 @@ class Node:
             except Exception:  # noqa: BLE001
                 log.exception("reader loop")
             await asyncio.sleep(60)
+
+    async def _challenge_loop(self):
+        """Faithfulness challenges (spec §9): run a round every hour.
+        The first round waits a full hour so entries have had time to
+        report uptime and the reader has had time to sync."""
+        while True:
+            await asyncio.sleep(3600)
+            try:
+                await self.challenger.round()
+            except Exception:  # noqa: BLE001
+                log.exception("challenge loop")
