@@ -92,6 +92,7 @@ class AnchorStore:
             "difficulties": list(v.difficulties),
             "cumulative": list(v.cumulative),
             "blobs": [b.hex() for b in v.blobs],
+            "checkpoint_height": v.checkpoint_height,
         }
 
     def _view_from_dict(self, d) -> ChainView | None:
@@ -104,6 +105,7 @@ class AnchorStore:
             difficulties=list(d["difficulties"]),
             cumulative=list(d["cumulative"]),
             blobs=[bytes.fromhex(b) for b in d["blobs"]],
+            checkpoint_height=int(d.get("checkpoint_height", 0)),
         )
 
 

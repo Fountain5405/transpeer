@@ -137,7 +137,8 @@ def test_headers():
     now = 1_700_000_000 + 120 * 39 + 60
     v = verify_headers(rows, cp, pow, now, rng=random.Random(1))
     check(v.tip_height == 39 and v.tip_id == block_id(rows[-1].blob), "view tip")
-    check(v.work == 50 * 40 and v.height_of(cp.hash) == 10, "cumulative work and lookup")
+    check(v.work == 50 * 29 and v.height_of(cp.hash) == 10,
+          "work counts only blocks after the checkpoint")
     check(parse_checkpoint(f"10:{cp.hash.hex()}") == cp, "parse_checkpoint")
     bad = list(rows); bad[20] = HeaderRow(20, rows[20].blob, 51)
     try:
@@ -160,6 +161,77 @@ def test_headers():
     longer = make_chain(45, pow)
     v2 = verify_headers(longer, Checkpoint(10, block_id(longer[10].blob)), pow, now + 600, rng=random.Random(1))
     check(best_view([v, v2]) is v2, "best_view picks the most work")
+
+
+def test_seed_and_work():
+    print("randomx seed rule and post-checkpoint work")
+    import random
+    from transpeer.anchor.headers import (verify_headers, Checkpoint, ChainView, HeaderError,
+                                          HeaderRow, best_view, HEADER_LOOKBACK)
+    from transpeer.anchor.monero import block_id, seed_height, SEEDHASH_EPOCH_BLOCKS, SEEDHASH_EPOCH_LAG
+    from transpeer.anchor.powhash import Sha256Pow
+
+    check((SEEDHASH_EPOCH_BLOCKS, SEEDHASH_EPOCH_LAG) == (2048, 64), "seed epoch constants")
+    check([seed_height(h) for h in (0, 2112, 2113, 4160, 4161)] == [0, 0, 2048, 2048, 4096],
+          "seed_height vectors from rx_seedheight")
+    check(HEADER_LOOKBACK == 2848, "header lookback covers the difficulty window and the seed epoch")
+
+    pow = Sha256Pow()
+    rows = make_chain(40, pow)
+    cp = Checkpoint(10, block_id(rows[10].blob))
+    now = 1_700_000_000 + 120 * 39 + 60
+
+    # A pre-checkpoint row claiming an impossible difficulty fails PoW.
+    # Its post-checkpoint difficulties are recomputed so that the chain is
+    # internally consistent and only the proof-of-work rule can catch it.
+    from transpeer.anchor.monero import next_difficulty, parse_hashing_blob
+    diffs = [2 ** 256 - 1 if r.height == 7 else r.difficulty for r in rows]
+    ts = [parse_hashing_blob(r.blob).timestamp for r in rows]
+    cum, run = [], 0
+    for i, r in enumerate(rows):
+        if r.height > cp.height:
+            diffs[i] = next_difficulty(ts[max(0, i - 735):i], cum[max(0, i - 735):i])
+        run += diffs[i]
+        cum.append(run)
+    bad = [HeaderRow(r.height, r.blob, diffs[i]) for i, r in enumerate(rows)]
+    try:
+        verify_headers(bad, cp, pow, now, rng=random.Random(1))
+        check(False, "inflated pre-checkpoint difficulty rejected")
+    except HeaderError as e:
+        check("proof-of-work" in str(e) and "7" in str(e),
+              "inflated pre-checkpoint difficulty is caught by proof-of-work")
+
+    # The verifier passes the seed hash of the seed height, not zeros.
+    seen = []
+
+    class RecordingPow:
+        name = "recording"
+
+        def hash(self, blob, height, seed_hash):
+            seen.append((height, seed_hash))
+            return pow.hash(blob, height, seed_hash)
+
+    verify_headers(rows, cp, RecordingPow(), now, rng=random.Random(1))
+    seed0 = block_id(rows[0].blob)
+    check(seen and all(sh == seed0 for _h, sh in seen),
+          "headers are hashed against the block id at their seed height")
+
+    # Work: inflated pre-checkpoint difficulty buys nothing.
+    honest = ChainView(first=0, ids=[bytes([i]) * 32 for i in range(20)],
+                       timestamps=[0] * 20, difficulties=[50] * 20,
+                       cumulative=[50 * (i + 1) for i in range(20)],
+                       blobs=[b""] * 20, checkpoint_height=10)
+    liar_diffs = [10 ** 9] * 11 + [50] * 4
+    liar_cum, run = [], 0
+    for d in liar_diffs:
+        run += d
+        liar_cum.append(run)
+    liar = ChainView(first=0, ids=[bytes([200 + i]) * 32 for i in range(15)],
+                     timestamps=[0] * 15, difficulties=liar_diffs,
+                     cumulative=liar_cum, blobs=[b""] * 15, checkpoint_height=10)
+    check(honest.work == 50 * 9 and liar.work == 50 * 4, "work ignores the pre-checkpoint window")
+    check(best_view([liar, honest]) is honest,
+          "more post-checkpoint blocks beats inflated pre-checkpoint difficulty")
 
 
 def test_share_codec():
@@ -1223,6 +1295,7 @@ if __name__ == "__main__":
     test_monero_hashing()
     test_pow_backends()
     test_headers()
+    test_seed_and_work()
     test_share_codec()
     test_stores()
     asyncio.run(test_endpoints_and_client())

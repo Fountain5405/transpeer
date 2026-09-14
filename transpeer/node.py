@@ -436,7 +436,7 @@ class Node:
         heights the store lacks, verifies the merged range with the
         node's PoW backend, and on success replaces the store's view;
         a failing verification logs and discards the newly fetched rows."""
-        from .anchor.headers import DIFFICULTY_BLOCKS_COUNT, HeaderError, parse_checkpoint, verify_headers
+        from .anchor.headers import HEADER_LOOKBACK, HeaderError, parse_checkpoint, verify_headers
         from .anchor.monerod import MonerodSource
         from .anchor.reader import coverage_from
 
@@ -446,7 +446,7 @@ class Node:
         while True:
             try:
                 tip = await source.height()
-                start = max(0, checkpoint.height - DIFFICULTY_BLOCKS_COUNT)
+                start = max(0, checkpoint.height - HEADER_LOOKBACK)
                 store_tip = self._anchor_store.tip_height()
                 if self._anchor_store.view is not None and store_tip is not None:
                     fetch_from = max(start, store_tip + 1)

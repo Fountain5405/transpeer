@@ -116,7 +116,17 @@ DIFFICULTY_CUT = 60
 DIFFICULTY_BLOCKS_COUNT = DIFFICULTY_WINDOW + DIFFICULTY_LAG
 BLOCK_FUTURE_TIME_LIMIT = 7200
 MONERO_BLOCK_TIME = 120
+# RandomX seed selection, Monero src/crypto/rx-slow-hash.c rx_seedheight.
+SEEDHASH_EPOCH_BLOCKS = 2048
+SEEDHASH_EPOCH_LAG = 64
 _MAX128 = (1 << 128) - 1
+
+
+def seed_height(height: int) -> int:
+    """Height of the block whose id seeds RandomX for `height`."""
+    if height <= SEEDHASH_EPOCH_BLOCKS + SEEDHASH_EPOCH_LAG:
+        return 0
+    return (height - SEEDHASH_EPOCH_LAG - 1) & ~(SEEDHASH_EPOCH_BLOCKS - 1)
 
 
 def tree_hash(hashes: list) -> bytes:
