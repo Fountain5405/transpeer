@@ -472,6 +472,182 @@ async def test_endpoints_and_client():
     await store.close()
 
 
+def build_world(pow):
+    """A 40-block anchor chain (checkpoint at height 5) whose blocks 30-39
+    carry merge-mining tags, and a 12-share mini-venue chain (shares 0-5
+    commit blob A, 6-11 commit blob B) whose share `2 + i` is tagged at
+    block `30 + i`. Reused by tasks 10-13."""
+    from transpeer.anchor import CHAIN_ID
+    from transpeer.anchor.blob import blob_hash as _blob_hash, encode_blob
+    from transpeer.anchor.headers import Checkpoint
+    from transpeer.anchor.merkle import build_mm_tag
+    from transpeer.anchor.monero import build_block_blob, hashing_blob, block_id, check_hash
+    from transpeer.anchor.headers import HeaderRow
+    from transpeer.anchor.share import VENUES, mine_share, parse_share
+
+    venue = VENUES["mini"]
+    blob_a = encode_blob("monero", 1, [("20.1.0.1", 7337)])
+    blob_b = encode_blob("monero", 1, [("20.2.0.1", 7337)])
+    hash_a = _blob_hash(blob_a)
+    hash_b = _blob_hash(blob_b)
+
+    shares = []
+    parent = bytes(32)
+    for i in range(12):
+        h = hash_a if i < 6 else hash_b
+        kw = dict(consensus_id=venue, txin_gen_height=30, prev_id=bytes(32),
+                  timestamp=1_700_000_000 + 10 * i, parent=parent, height=i,
+                  difficulty=300, cumulative_difficulty=300 * (i + 1),
+                  aux={CHAIN_ID: (h, 100000)})
+        raw = mine_share(kw, pow)
+        share = parse_share(raw, venue)
+        shares.append(share)
+        parent = share.id
+
+    rows = []
+    blocks = {}
+    prev = bytes(32)
+    start_ts = 1_700_000_000
+    difficulty = 50
+    for height in range(40):
+        ts = start_ts + 120 * height
+        if 30 <= height <= 39:
+            tag_share = shares[2 + (height - 30)]
+            tag = build_mm_tag(tag_share.n_aux_chains, tag_share.aux_nonce, tag_share.merkle_root)
+            tx_extra = b"\x01" + bytes(32) + tag
+        else:
+            tx_extra = b"\x01" + bytes(32)
+
+        nonce = 0
+        while True:
+            block = build_block_blob(16, 16, ts, prev, nonce, height, tx_extra)
+            hb = hashing_blob(block)
+            if check_hash(pow.hash(hb, height, bytes(32)), difficulty):
+                break
+            nonce += 1
+        rows.append(HeaderRow(height, hb, difficulty))
+        blocks[height] = block
+        prev = block_id(hb)
+
+    checkpoint = Checkpoint(5, block_id(rows[5].blob))
+    return {
+        "rows": rows, "blocks": blocks, "shares": shares,
+        "blobs": {"A": blob_a, "B": blob_b}, "hash_a": hash_a, "hash_b": hash_b,
+        "venue": venue, "checkpoint": checkpoint,
+    }
+
+
+async def test_reader():
+    print("reader: sync and gossip")
+    from aiohttp import web
+    from transpeer.config import Config
+    from transpeer.peerstore import PeerStore
+    from transpeer.server import TranspeerServer
+    from transpeer.anchor import CHAIN_ID
+    from transpeer.anchor.blob import blob_hash as _blob_hash, encode_blob
+    from transpeer.anchor.blobdb import BlobDB, Commitment
+    from transpeer.anchor.fetch import AnchorClient
+    from transpeer.anchor.powhash import Sha256Pow
+    from transpeer.anchor.reader import Reader
+    from transpeer.anchor.share import mine_share, parse_share
+    from transpeer.anchor.stores import AnchorStore, ShareStore
+
+    pow = Sha256Pow()
+    world = build_world(pow)
+    rows, blocks, shares = world["rows"], world["blocks"], world["shares"]
+    blob_a, blob_b = world["blobs"]["A"], world["blobs"]["B"]
+    hash_a, hash_b = world["hash_a"], world["hash_b"]
+    venue = world["venue"]
+    checkpoint = world["checkpoint"]
+    now = 1_700_000_000 + 120 * 39 + 60
+
+    srv_anchor = AnchorStore(None)
+    srv_anchor.put_headers(rows)
+    for h, blob in blocks.items():
+        srv_anchor.put_block(h, blob)
+
+    srv_shares = ShareStore(venue, None)
+    for s in shares:
+        srv_shares.add(s)
+
+    srv_db = BlobDB()
+    srv_db.add(blob_a, Commitment(hash_a, "template", "v", "", "pub", 0, 0), now - 100)
+    srv_db.add(blob_b, Commitment(hash_b, "template", "v", "", "pub", 0, 0), now - 100)
+
+    cfg = Config(in_memory=True, no_verify=True, anchor_chain="monero",
+                port=17353, bind="127.0.0.1")
+    srv_store = PeerStore(cfg)
+    await srv_store.init()
+
+    srv = TranspeerServer(cfg, srv_store, "test_reader_srv", time.time(),
+                          network_names=["monero"], blobdb=srv_db,
+                          anchor_store=srv_anchor, share_stores={venue: srv_shares})
+    runner = web.AppRunner(srv.create_app())
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 17353)
+    await site.start()
+
+    r_store = None
+    try:
+        window_days = (40 - 30) * 120 / 86400
+        rcfg = Config(in_memory=True, no_verify=True, anchor_chain="monero",
+                      anchor_checkpoint=f"5:{checkpoint.hash.hex()}",
+                      anchor_window_days=window_days, port=17390, bind="127.0.0.1")
+        r_store = PeerStore(rcfg)
+        await r_store.init()
+        r_db = BlobDB()
+        r_anchor = AnchorStore(None)
+        client = AnchorClient(rcfg)
+        reader = Reader(rcfg, r_store, r_db, r_anchor, {}, client, pow, clock=lambda: now)
+
+        state = await reader.sync([("127.0.0.1", 17353)])
+        check(state.tagged == 10, "10 tagged blocks in the coverage window")
+        check(state.resolved == 10, "all 10 tags resolved")
+        check(state.bootstrapped, "bootstrapped")
+        check(state.venues.get(venue) == shares[11].id, "canonical tip is share 11")
+        check(state.weights == {("20.1.0.1", 7337): 1800, ("20.2.0.1", 7337): 1800},
+              "weights sum to 300*6 per blob")
+        e_a = r_store.get_transpeer("20.1.0.1", 7337)
+        e_b = r_store.get_transpeer("20.2.0.1", 7337)
+        check(e_a is not None and e_a.published and e_b is not None and e_b.published,
+              "both entries published in the store")
+        check(r_db.get(hash_a) == blob_a and r_db.get(hash_b) == blob_b, "blobdb holds A and B")
+        check(any(c.kind == "share" for c in r_db.commitments(hash_a))
+              and any(c.kind == "share" for c in r_db.commitments(hash_b)),
+              "share commitments recorded for A and B")
+
+        # gossip: blob C (share commitment, minted on top of share 11) and blob D
+        # (template only, never verifiable) both new to the reader.
+        blob_c = encode_blob("monero", 1, [("20.3.0.1", 7337)])
+        hash_c = _blob_hash(blob_c)
+        raw12 = mine_share(dict(
+            consensus_id=venue, txin_gen_height=30, prev_id=bytes(32),
+            timestamp=1_700_000_000 + 10 * 12, parent=shares[11].id, height=12,
+            difficulty=300, cumulative_difficulty=300 * 13,
+            aux={CHAIN_ID: (hash_c, 100000)}), pow)
+        share12 = parse_share(raw12, venue)
+        srv_shares.add(share12)
+        srv_db.add(blob_c, Commitment(hash_c, "share", venue.hex(), share12.id.hex(),
+                                      share12.wallet, share12.difficulty, share12.timestamp),
+                  now - 10)
+
+        blob_d = encode_blob("monero", 1, [("20.4.0.1", 7337)])
+        hash_d = _blob_hash(blob_d)
+        srv_db.add(blob_d, Commitment(hash_d, "template", "v", "", "pub", 0, 0), now - 10)
+
+        n = await reader.gossip("127.0.0.1", 17353)
+        check(n >= 1, "gossip reports new rows stored")
+        check(r_db.get(hash_c) == blob_c, "gossip fetched and verified blob C")
+        check(any(c.kind == "share" for c in r_db.commitments(hash_c)),
+              "C stored with its verified share commitment")
+        check(r_db.get(hash_d) is None, "row with a template-only commitment is not stored")
+    finally:
+        await runner.cleanup()
+        await srv_store.close()
+        if r_store is not None:
+            await r_store.close()
+
+
 if __name__ == "__main__":
     test_index_cursor()
     test_monero_hashing()
@@ -480,5 +656,6 @@ if __name__ == "__main__":
     test_share_codec()
     test_stores()
     asyncio.run(test_endpoints_and_client())
+    asyncio.run(test_reader())
     print(f"\n{passed} passed, {failed} failed")
     sys.exit(1 if failed else 0)

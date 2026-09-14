@@ -87,6 +87,11 @@ class TranspeerEntry:
     # network's P2P port? Filled by the native probe under --native-vouchers.
     native: dict = field(default_factory=dict)
     first_seen: int = 0
+    # Chain-anchored publication (spec §7, §9): seeded/re-seeded from
+    # weights (published) or marked after repeated faithfulness-challenge
+    # failures (unfaithful). Both default off; set by the reader.
+    published: bool = False
+    unfaithful: bool = False
 
     @property
     def key(self) -> str:
@@ -99,6 +104,8 @@ class TranspeerEntry:
             "networks": self.networks,
             "last_seen": self.last_seen,
             "first_seen": self.first_seen,
+            "published": self.published,
+            "unfaithful": self.unfaithful,
         }
 
 
@@ -201,6 +208,16 @@ class PeerStore:
                 "ALTER TABLE transpeers ADD COLUMN first_seen INTEGER NOT NULL DEFAULT 0"
             )
             await self._db.commit()
+        if "published" not in columns:
+            await self._db.execute(
+                "ALTER TABLE transpeers ADD COLUMN published INTEGER NOT NULL DEFAULT 0"
+            )
+            await self._db.commit()
+        if "unfaithful" not in columns:
+            await self._db.execute(
+                "ALTER TABLE transpeers ADD COLUMN unfaithful INTEGER NOT NULL DEFAULT 0"
+            )
+            await self._db.commit()
         await self._load()
 
     async def _load(self):
@@ -221,6 +238,8 @@ class PeerStore:
                     networks=row[2].split(",") if row[2] else [],
                     last_seen=row[3],
                     first_seen=row[4] or row[3],
+                    published=bool(row[5]) if len(row) > 5 else False,
+                    unfaithful=bool(row[6]) if len(row) > 6 else False,
                 )
                 self._transpeers[entry.key] = entry
 
@@ -764,11 +783,31 @@ class PeerStore:
         if not self._db:
             return
         await self._db.execute("""
-            INSERT OR REPLACE INTO transpeers (addr, port, networks, last_seen, first_seen)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT OR REPLACE INTO transpeers
+                (addr, port, networks, last_seen, first_seen, published, unfaithful)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
         """, (entry.addr, entry.port, ",".join(entry.networks), entry.last_seen,
-              entry.first_seen))
+              entry.first_seen, int(entry.published), int(entry.unfaithful)))
         await self._db.commit()
+
+    async def set_published(self, addr: str, port: int, flag: bool) -> None:
+        """Mark a transpeer published/unpublished (spec §7): set by the
+        reader when it seeds or re-seeds the store from weights."""
+        async with self._lock:
+            entry = self._transpeers.get(f"{addr}:{port}")
+            if entry is None:
+                return
+            entry.published = flag
+            await self._save_transpeer(entry)
+
+    async def set_unfaithful(self, addr: str, port: int, flag: bool) -> None:
+        """Mark a transpeer unfaithful/faithful (spec §9)."""
+        async with self._lock:
+            entry = self._transpeers.get(f"{addr}:{port}")
+            if entry is None:
+                return
+            entry.unfaithful = flag
+            await self._save_transpeer(entry)
 
     # -- Candidates (IPs that queried us, potential transpeers) --
 

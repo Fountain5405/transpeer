@@ -124,6 +124,13 @@ class Config:
     anchor_min_age: float = 14.0   # days a transpeer must have been known (spec 4.1 rule 1)
     anchor_max_new: float = 0.25   # share of entries allowed without a committed history (rule 5)
     anchor_sim_pow: bool = False
+    # The reader: the newcomer path (spec §6-§8), blob gossip (§5).
+    anchor_read: bool = False
+    anchor_checkpoint: str = ""
+    anchor_venues: str = ""
+    anchor_window_days: float = 7.0
+    anchor_monerod: str = ""
+    anchor_observe: str = ""
 
     def __post_init__(self):
         if not self.in_memory:
@@ -242,6 +249,34 @@ def parse_args() -> Config:
         "and share proof-of-work.",
     )
     parser.add_argument(
+        "--anchor-read", action="store_true",
+        help="Run the reader: the newcomer path over the anchor chain and "
+        "venue shares, and blob gossip. Requires --anchor-checkpoint.",
+    )
+    parser.add_argument(
+        "--anchor-checkpoint", default="",
+        help="HEIGHT:HASH of a trusted anchor-chain block, shipped with a "
+        "release. Required by --anchor-read.",
+    )
+    parser.add_argument(
+        "--anchor-venues", default="",
+        help="Comma-separated venue names (resolved through the built-in "
+        "table) or 64-hex consensus ids. Empty means main, mini and nano.",
+    )
+    parser.add_argument(
+        "--anchor-window-days", type=float, default=7.0,
+        help="Coverage window: the anchor chain's last N days (spec §8).",
+    )
+    parser.add_argument(
+        "--anchor-monerod", default="",
+        help="monerod JSON-RPC URL to fill the anchor store from directly.",
+    )
+    parser.add_argument(
+        "--anchor-observe", default="",
+        help="Comma-separated HOST:PORT list of P2Pool nodes to fill share "
+        "stores from through the observer client.",
+    )
+    parser.add_argument(
         "--scan-idle-rate", type=float, default=0.0,
         help="Probes per second once --scan-target-known transpeers have "
         "answered (default 0: stop scanning).",
@@ -270,6 +305,8 @@ def parse_args() -> Config:
         help="Log store composition every N seconds (simulation metric).",
     )
     args = parser.parse_args()
+    if args.anchor_read and not args.anchor_checkpoint:
+        parser.error("--anchor-read requires --anchor-checkpoint")
     return Config(
         port=args.port,
         bind=args.bind,
@@ -304,6 +341,12 @@ def parse_args() -> Config:
         anchor_min_age=args.anchor_min_age,
         anchor_max_new=args.anchor_max_new,
         anchor_sim_pow=args.anchor_sim_pow,
+        anchor_read=args.anchor_read,
+        anchor_checkpoint=args.anchor_checkpoint,
+        anchor_venues=args.anchor_venues,
+        anchor_window_days=args.anchor_window_days,
+        anchor_monerod=args.anchor_monerod,
+        anchor_observe=args.anchor_observe,
         snapshot_interval=args.snapshot_interval,
     )
 
