@@ -78,7 +78,7 @@ class LoadTracker:
 class TranspeerServer:
     def __init__(self, config: Config, store: PeerStore, node_id: str, start_time: float,
                  network_names: list[str] | None = None,
-                 blobdb=None, publisher=None):
+                 blobdb=None, publisher=None, anchor_store=None, share_stores=None):
         self.config = config
         self.store = store
         self.node_id = node_id
@@ -88,6 +88,8 @@ class TranspeerServer:
         self.load_tracker = LoadTracker()
         self.blobdb = blobdb
         self.publisher = publisher
+        self.anchor_store = anchor_store
+        self.share_stores: dict[bytes, "ShareStore"] = share_stores or {}
 
     def _check_rate_limit(self, addr: str) -> bool:
         now = time.time()
@@ -279,6 +281,108 @@ class TranspeerServer:
             "next_after": rows[-1][0].hex() if full else None,
         })
 
+    async def handle_anchor_headers(self, request: web.Request) -> web.Response:
+        if self.anchor_store is None:
+            return web.json_response({"error": "anchor not configured"}, status=404)
+        if not self._check_rate_limit(request.remote):
+            return web.json_response({"error": "rate limited"}, status=429)
+        chain = request.match_info["chain"]
+        if chain != self.config.anchor_chain:
+            return web.json_response({"error": "unknown chain"}, status=404)
+        try:
+            from_height = int(request.query.get("from", "0"))
+            count = max(1, min(int(request.query.get("count", "720")), 720))
+        except ValueError:
+            return web.json_response({"error": "bad query"}, status=400)
+        rows = self.anchor_store.header_rows(from_height, count)
+        return web.json_response({
+            "chain": chain,
+            "tip": self.anchor_store.tip_height(),
+            "headers": [{"height": r.height, "blob": r.blob.hex(), "difficulty": r.difficulty}
+                        for r in rows],
+        })
+
+    async def handle_anchor_coinbase(self, request: web.Request) -> web.Response:
+        if self.anchor_store is None:
+            return web.json_response({"error": "anchor not configured"}, status=404)
+        if not self._check_rate_limit(request.remote):
+            return web.json_response({"error": "rate limited"}, status=429)
+        chain = request.match_info["chain"]
+        if chain != self.config.anchor_chain:
+            return web.json_response({"error": "unknown chain"}, status=404)
+        try:
+            height = int(request.match_info["height"])
+        except ValueError:
+            return web.json_response({"error": "bad height"}, status=400)
+        blob = self.anchor_store.block(height)
+        if blob is None:
+            return web.json_response({"error": "unknown block"}, status=404)
+        return web.Response(body=blob, content_type="application/octet-stream")
+
+    def _venue_store(self, request: web.Request):
+        """Resolve {id} as 64 hex chars to a ShareStore, or a (400/404)
+        Response if the id is malformed or the venue isn't served."""
+        try:
+            venue = bytes.fromhex(request.match_info["id"])
+            if len(venue) != 32:
+                raise ValueError
+        except ValueError:
+            return None, web.json_response({"error": "bad venue"}, status=400)
+        store = self.share_stores.get(venue)
+        if store is None:
+            return None, web.json_response({"error": "unknown venue"}, status=404)
+        return store, None
+
+    async def handle_venue_share(self, request: web.Request) -> web.Response:
+        if not self._check_rate_limit(request.remote):
+            return web.json_response({"error": "rate limited"}, status=429)
+        store, err = self._venue_store(request)
+        if err is not None:
+            return err
+        try:
+            share_id = bytes.fromhex(request.match_info["share_id"])
+            if len(share_id) != 32:
+                raise ValueError
+        except ValueError:
+            return web.json_response({"error": "bad share id"}, status=400)
+        raw = store.raw(share_id)
+        if raw is None:
+            return web.json_response({"error": "unknown share"}, status=404)
+        return web.Response(body=raw, content_type="application/octet-stream")
+
+    async def handle_venue_shares(self, request: web.Request) -> web.Response:
+        if not self._check_rate_limit(request.remote):
+            return web.json_response({"error": "rate limited"}, status=429)
+        store, err = self._venue_store(request)
+        if err is not None:
+            return err
+        try:
+            from_id = bytes.fromhex(request.query.get("from", ""))
+            if len(from_id) != 32:
+                raise ValueError
+            count = max(1, min(int(request.query.get("count", "64")), 64))
+        except ValueError:
+            return web.json_response({"error": "bad query"}, status=400)
+        shares = store.walk(from_id, count)
+        return web.json_response({"shares": [s.raw.hex() for s in shares]})
+
+    async def handle_venue_share_by_root(self, request: web.Request) -> web.Response:
+        if not self._check_rate_limit(request.remote):
+            return web.json_response({"error": "rate limited"}, status=429)
+        store, err = self._venue_store(request)
+        if err is not None:
+            return err
+        try:
+            root = bytes.fromhex(request.match_info["root"])
+            if len(root) != 32:
+                raise ValueError
+        except ValueError:
+            return web.json_response({"error": "bad root"}, status=400)
+        share = store.by_root(root)
+        if share is None:
+            return web.json_response({"error": "unknown root"}, status=404)
+        return web.Response(body=share.raw, content_type="application/octet-stream")
+
     def create_app(self) -> web.Application:
         app = web.Application()
         app.router.add_get("/transpeer", self.handle_transpeer)
@@ -287,4 +391,9 @@ class TranspeerServer:
         app.router.add_get("/transpeers", self.handle_transpeers)
         app.router.add_get("/blob/{hash}", self.handle_blob)
         app.router.add_get("/blobs/index", self.handle_blobs_index)
+        app.router.add_get("/anchor/{chain}/headers", self.handle_anchor_headers)
+        app.router.add_get("/anchor/{chain}/coinbase/{height}", self.handle_anchor_coinbase)
+        app.router.add_get("/venue/{id}/share/{share_id}", self.handle_venue_share)
+        app.router.add_get("/venue/{id}/shares", self.handle_venue_shares)
+        app.router.add_get("/venue/{id}/share_by_root/{root}", self.handle_venue_share_by_root)
         return app

@@ -322,6 +322,156 @@ def test_stores():
         check(old.count() == 0, "prune drops shares below tip_height - 4*window")
 
 
+async def test_endpoints_and_client():
+    print("anchor/venue endpoints and fetch client")
+    import aiohttp
+    from aiohttp import web
+    from transpeer.config import Config
+    from transpeer.peerstore import PeerStore
+    from transpeer.server import TranspeerServer
+    from transpeer.anchor import CHAIN_ID
+    from transpeer.anchor.blob import blob_hash, encode_blob
+    from transpeer.anchor.blobdb import BlobDB, Commitment
+    from transpeer.anchor.headers import HeaderRow
+    from transpeer.anchor.powhash import Sha256Pow
+    from transpeer.anchor.share import VENUES, mine_share, parse_share
+    from transpeer.anchor.stores import AnchorStore, ShareStore
+    from transpeer.anchor.fetch import AnchorClient
+
+    pow = Sha256Pow()
+    cfg = Config(in_memory=True, no_verify=True, anchor_chain="monero",
+                 port=17350, bind="127.0.0.1")
+    store = PeerStore(cfg)
+    await store.init()
+
+    anchor_store = AnchorStore(None)
+    rows = make_chain(40, pow)
+    anchor_store.put_headers(rows)
+    anchor_store.put_block(0, rows[0].blob)
+
+    venue = VENUES["mini"]
+    blob_h = hashlib.sha256(b"venue-blob").digest()
+    kw = dict(consensus_id=venue, txin_gen_height=3000000, prev_id=bytes(32),
+              timestamp=1_700_000_000, parent=bytes(32), height=0, difficulty=300,
+              cumulative_difficulty=300, aux={CHAIN_ID: (blob_h, 100000)})
+    raw1 = mine_share(kw, pow)
+    s1 = parse_share(raw1, venue)
+    raw2 = mine_share(dict(kw, parent=s1.id, height=1, cumulative_difficulty=600, aux={}), pow)
+    s2 = parse_share(raw2, venue)
+    share_store = ShareStore(venue, None)
+    share_store.add(s1)
+    share_store.add(s2)
+
+    db = BlobDB()
+    now = 2_000_000_000
+    b_db = encode_blob("monero", 5, [("20.0.0.1", 7337)])
+    db.add(b_db, Commitment(blob_hash(b_db), "share", "v", "s1", "w", 10, now - 50), now - 40)
+
+    srv = TranspeerServer(cfg, store, "test_anchor_read", time.time(),
+                          network_names=["monero"], blobdb=db,
+                          anchor_store=anchor_store, share_stores={venue: share_store})
+    runner = web.AppRunner(srv.create_app())
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 17350)
+    await site.start()
+
+    # Second, unrelated app serving a body whose hash won't match what we ask for.
+    async def wrong_body(request):
+        return web.Response(body=b"not the blob you are looking for",
+                             content_type="application/octet-stream")
+    wrong_app = web.Application()
+    wrong_app.router.add_get("/blob/{hash}", wrong_body)
+    wrong_runner = web.AppRunner(wrong_app)
+    await wrong_runner.setup()
+    wrong_site = web.TCPSite(wrong_runner, "127.0.0.1", 17351)
+    await wrong_site.start()
+
+    client = AnchorClient(cfg)
+    try:
+        headers = await client.fetch_headers("127.0.0.1", 17350, "monero", 0, 5)
+        check(len(headers) == 5 and headers[0].height == 0 and headers[0].blob == rows[0].blob
+              and headers[0].difficulty == rows[0].difficulty, "fetch_headers round trip")
+
+        big = await client.fetch_headers("127.0.0.1", 17350, "monero", 0, 5000)
+        check(len(big) == 40, "count clamped to available rows (40 of 40)")
+
+        clamp = await client.fetch_headers("127.0.0.1", 17350, "monero", 0, 800)
+        check(len(clamp) <= 40, "count=800 against a 40-row chain still returns 40")
+
+        tip = await client.fetch_tip("127.0.0.1", 17350, "monero")
+        check(tip == 39, "fetch_tip")
+
+        wrong_chain = await client.fetch_tip("127.0.0.1", 17350, "bitcoin")
+        check(wrong_chain is None, "wrong chain name 404s -> None")
+
+        block = await client.fetch_block("127.0.0.1", 17350, "monero", 0)
+        check(block == rows[0].blob, "fetch_block round trip")
+
+        missing_block = await client.fetch_block("127.0.0.1", 17350, "monero", 1)
+        check(missing_block is None, "missing block -> None")
+
+        share = await client.fetch_share("127.0.0.1", 17350, venue, s1.id)
+        check(share == raw1, "fetch_share round trip")
+
+        missing_share = await client.fetch_share("127.0.0.1", 17350, venue, bytes(32))
+        check(missing_share is None, "unknown share -> None")
+
+        bad_venue = await client.fetch_share("127.0.0.1", 17350, VENUES["main"], s1.id)
+        check(bad_venue is None, "unserved venue -> None")
+
+        shares = await client.fetch_shares("127.0.0.1", 17350, venue, s2.id, 10)
+        check(shares == [raw2, raw1], "fetch_shares walks parent chain")
+
+        one = await client.fetch_shares("127.0.0.1", 17350, venue, s2.id, 1)
+        check(one == [raw2], "fetch_shares count clamp")
+
+        by_root = await client.fetch_share_by_root("127.0.0.1", 17350, venue, s1.merkle_root)
+        check(by_root == raw1, "fetch_share_by_root round trip")
+
+        missing_root = await client.fetch_share_by_root("127.0.0.1", 17350, venue, bytes(32))
+        check(missing_root is None, "unknown root -> None")
+
+        blob = await client.fetch_blob("127.0.0.1", 17350, blob_hash(b_db))
+        check(blob == b_db, "fetch_blob round trip")
+
+        bad_hash_blob = await client.fetch_blob("127.0.0.1", 17351, blob_hash(b_db))
+        check(bad_hash_blob is None, "fetch_blob rejects a body whose hash doesn't match")
+
+        async with aiohttp.ClientSession() as s:
+            async with s.get(f"http://127.0.0.1:17350/venue/{venue.hex()}/share/zz") as r:
+                check(r.status == 400, "bad share hex 400 (venue is served)")
+
+        idx_rows, next_since, next_after = await client.fetch_index("127.0.0.1", 17350, 0)
+        check(len(idx_rows) == 1 and idx_rows[0]["hash"] == blob_hash(b_db).hex(), "fetch_index returns raw dicts")
+        check(next_since is None and next_after is None, "fetch_index: no more pages")
+    finally:
+        await runner.cleanup()
+        await wrong_runner.cleanup()
+
+    # Unconfigured server: 404 on anchor/venue routes.
+    srv2 = TranspeerServer(cfg, store, "test_anchor_read2", time.time(),
+                           network_names=["monero"])
+    runner2 = web.AppRunner(srv2.create_app())
+    await runner2.setup()
+    site2 = web.TCPSite(runner2, "127.0.0.1", 17352)
+    await site2.start()
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.get("http://127.0.0.1:17352/anchor/monero/headers") as r:
+                j = await r.json()
+                check(r.status == 404 and j["error"] == "anchor not configured", "no anchor: headers 404")
+            async with s.get("http://127.0.0.1:17352/anchor/monero/coinbase/0") as r:
+                check(r.status == 404, "no anchor: coinbase 404")
+            async with s.get(f"http://127.0.0.1:17352/venue/{venue.hex()}/share/{'00' * 32}") as r:
+                check(r.status == 404, "no venue: share 404")
+            async with s.get(f"http://127.0.0.1:17352/venue/zz/share/{'00' * 32}") as r:
+                check(r.status == 400, "bad venue hex 400")
+    finally:
+        await runner2.cleanup()
+
+    await store.close()
+
+
 if __name__ == "__main__":
     test_index_cursor()
     test_monero_hashing()
@@ -329,5 +479,6 @@ if __name__ == "__main__":
     test_headers()
     test_share_codec()
     test_stores()
+    asyncio.run(test_endpoints_and_client())
     print(f"\n{passed} passed, {failed} failed")
     sys.exit(1 if failed else 0)
