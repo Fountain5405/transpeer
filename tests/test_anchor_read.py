@@ -1099,6 +1099,54 @@ async def test_p2p_observer():
         await double.stop()
 
 
+async def test_p2p_peer_list_edge_cases():
+    from transpeer.anchor.share import VENUES
+    from transpeer.anchor.p2p import P2PoolClient
+    from sim.p2pool_double import P2PoolDouble
+
+    print("p2p peer list: pseudo-peer slot 0 and P2Pool's IPv4 filter")
+    venue = VENUES["mini"]
+
+    # 16 real peers: the pseudo-peer must take slot 0 (dropping one real
+    # peer) on the first response, not be appended past the 16-peer cap.
+    sixteen_peers = [(f"203.0.113.{i}", 37889) for i in range(1, 17)]
+    double = P2PoolDouble(venue, {}, bytes(32), sixteen_peers)
+    await double.start(17360)
+    try:
+        client = P2PoolClient("127.0.0.1", 17360, venue)
+        await client.connect()
+        try:
+            first = await client.request_peers()
+            check(len(first) == 15,
+                  "first PEER_LIST_RESPONSE: pseudo-peer takes slot 0, 15 real peers follow")
+            check(set(first) <= set(sixteen_peers), "connection survives; peers are from the configured list")
+
+            second = await client.request_peers()
+            check(len(second) == 16 and set(second) == set(sixteen_peers),
+                  "second PEER_LIST_RESPONSE (no pseudo-peer): all 16 real peers")
+        finally:
+            await client.close()
+    finally:
+        await double.stop()
+
+    # P2Pool's on_peer_list_response filter: first octet 0, 127 or >= 224
+    # is dropped (224.0.0.0/3 is multicast/reserved), not only 0.0.0.0/loopback.
+    filtered_peers = [("203.0.113.9", 37889), ("224.0.0.1", 37889)]
+    double2 = P2PoolDouble(venue, {}, bytes(32), filtered_peers)
+    await double2.start(17361)
+    try:
+        client2 = P2PoolClient("127.0.0.1", 17361, venue)
+        await client2.connect()
+        try:
+            peers = await client2.request_peers()
+            check(("224.0.0.1", 37889) not in peers and ("203.0.113.9", 37889) in peers,
+                  "a 224.0.0.0/3 peer is filtered out, not just 0.0.0.0/loopback")
+        finally:
+            await client2.close()
+    finally:
+        await double2.stop()
+
+
 if __name__ == "__main__":
     test_index_cursor()
     test_monero_hashing()
@@ -1115,5 +1163,6 @@ if __name__ == "__main__":
     asyncio.run(test_node_wiring_read())
     asyncio.run(test_challenges())
     asyncio.run(test_p2p_observer())
+    asyncio.run(test_p2p_peer_list_edge_cases())
     print(f"\n{passed} passed, {failed} failed")
     sys.exit(1 if failed else 0)

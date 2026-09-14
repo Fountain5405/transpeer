@@ -118,26 +118,34 @@ def _ipv4_mapped(ip: str) -> bytes:
 
 def encode_peer_list_response(peers: list, include_version: bool = False) -> bytes:
     """peers: list of (ip_str, port). Encodes IPv4 as IPv4-mapped, IPv6 as
-    the raw 16-byte address, v6 flag 0."""
+    the raw 16-byte address, v6 flag 0. Matches P2Pool's
+    on_peer_list_request (excerpt lines 516-543): when include_version is
+    set, the pseudo-peer overwrites slot 0 rather than being appended, so
+    the total never exceeds PEER_LIST_RESPONSE_MAX_PEERS and the first
+    real peer is dropped once the list is full."""
+    real_limit = PEER_LIST_RESPONSE_MAX_PEERS - 1 if include_version else PEER_LIST_RESPONSE_MAX_PEERS
     entries = []
-    if include_version:
-        entries.append(_version_pseudo_peer())
-    for ip, port in peers[:PEER_LIST_RESPONSE_MAX_PEERS]:
+    for ip, port in peers[:real_limit]:
         addr = ipaddress.ip_address(ip)
         if addr.version == 4:
             entries.append(_encode_peer_entry(False, _ipv4_mapped(ip), port))
         else:
             entries.append(_encode_peer_entry(True, addr.packed, port))
+    if include_version:
+        entries.insert(0, _version_pseudo_peer())
     count = len(entries)
-    if count > 255:
+    if count > PEER_LIST_RESPONSE_MAX_PEERS:
         raise ProtocolError("too many peers for a single PEER_LIST_RESPONSE")
     return bytes([PEER_LIST_RESPONSE, count]) + b"".join(entries)
 
 
 def decode_peer_list_response(payload: bytes) -> list:
     """payload excludes the id byte but includes the count byte. Returns
-    [(ip_str, port), ...] skipping the version pseudo-peer and
-    loopback/zero addresses."""
+    [(ip_str, port), ...] skipping the version pseudo-peer (which falls
+    out of the same filter, since 255.255.255.255 has first octet 255)
+    and, per P2Pool's on_peer_list_response, any IPv4 address whose first
+    octet is 0, 127 or >= 224 (raw_ip::is_localhost() plus the
+    0.0.0.0/8 and 224.0.0.0/3 exclusions), and any entry with port 0."""
     if not payload:
         raise ProtocolError("empty PEER_LIST_RESPONSE payload")
     count = payload[0]
@@ -150,22 +158,16 @@ def decode_peer_list_response(payload: bytes) -> list:
         is_v6 = entry[0] != 0
         addr16 = entry[1:17]
         port = int.from_bytes(entry[17:19], "little")
-        # Version pseudo-peer: marker 0xFFFFFFFF at bytes 12..16, port 0xFFFF.
-        if port == _VERSION_PORT and int.from_bytes(addr16[12:16], "little") == _VERSION_MARKER:
+        if port == 0:
             continue
-        # IPv4-mapped: bytes 10..12 == 0xFFFF regardless of the v6 flag.
-        if addr16[10:12] == b"\xff\xff":
-            ip = str(ipaddress.IPv4Address(addr16[12:16]))
-            if ip == "0.0.0.0" or ipaddress.IPv4Address(ip).is_loopback:
+        # IPv4-mapped (bytes 10..12 == 0xFFFF) is treated as IPv4 regardless
+        # of the v6 flag, same as P2Pool's is_ipv4_prefix() downgrade.
+        is_ipv4 = (not is_v6) or addr16[10:12] == b"\xff\xff"
+        if is_ipv4:
+            first_octet = addr16[12]
+            if first_octet == 0 or first_octet == 127 or first_octet >= 224:
                 continue
-            out.append((ip, port))
-            continue
-        if not is_v6:
-            # Plain (non-mapped) IPv4-looking entry: last 4 bytes are the address.
-            ip = str(ipaddress.IPv4Address(addr16[12:16]))
-            if ip == "0.0.0.0" or ipaddress.IPv4Address(ip).is_loopback:
-                continue
-            out.append((ip, port))
+            out.append((str(ipaddress.IPv4Address(addr16[12:16])), port))
             continue
         v6 = ipaddress.IPv6Address(addr16)
         if v6.is_loopback or v6 == ipaddress.IPv6Address(0):
