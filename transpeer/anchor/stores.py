@@ -169,7 +169,7 @@ class ShareStore:
         self._shares = {}
         self._by_root = {}
         for entry in self.path.iterdir():
-            if not entry.is_file():
+            if entry.is_symlink() or not entry.is_file():
                 continue
             try:
                 data = entry.read_bytes()

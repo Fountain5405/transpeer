@@ -227,10 +227,27 @@ def test_stores():
         for r in rows:
             store.put_block(r.height, r.blob)
         check(store.tip_height() == 4, "tip_height is the highest header")
+
+        import random
+        from transpeer.anchor.headers import Checkpoint, verify_headers
+        from transpeer.anchor.monero import block_id
+        cp = Checkpoint(2, block_id(rows[2].blob))
+        now = 1_700_000_000 + 120 * 4 + 60
+        v = verify_headers(rows, cp, pow, now, rng=random.Random(1))
+        store.view = v
         store.save()
 
         store2 = AnchorStore(path)
         store2.load()
+        check(store2.view is not None
+              and store2.view.tip_height == v.tip_height
+              and store2.view.tip_id == v.tip_id
+              and store2.view.work == v.work
+              and store2.view.first == v.first,
+              "loaded view matches saved view's tip/work/first")
+        check(store2.view.timestamps == v.timestamps and store2.view.blobs == v.blobs
+              and store2.view.difficulties == v.difficulties and store2.view.cumulative == v.cumulative,
+              "loaded view carries all per-block fields")
         got = store2.header_rows(2, 10)
         check(len(got) == 3, "header_rows returns the contiguous tail from height 2")
         check(got[0].height == 2 and got[-1].height == 4, "header_rows heights")
