@@ -307,6 +307,8 @@ def parse_args() -> Config:
     args = parser.parse_args()
     if args.anchor_read and not args.anchor_checkpoint:
         parser.error("--anchor-read requires --anchor-checkpoint")
+    if (args.anchor_monerod or args.anchor_observe) and not args.anchor_read:
+        parser.error("--anchor-monerod and --anchor-observe require --anchor-read")
     return Config(
         port=args.port,
         bind=args.bind,

@@ -856,7 +856,7 @@ height and the proof; `template` records are dropped, they carry no
 weight and are the publisher's own. The `/blobs/index` cursor is made
 inclusive with a `(first_seen, hash)` pair so that rows sharing a
 timestamp across a page boundary are not skipped; the response carries
-`next_since` and `next_hash`.
+`next_since` and `next_after`.
 
 **Store tags and ranking.** `TranspeerEntry` gains `published` (set
 when the reader seeds or re-seeds the store from weights) and
@@ -872,12 +872,14 @@ count, as before.
 
 **Observer client.** A minimal P2Pool P2P client transcribed from
 `p2p_server.cpp`: challenge, solution with the 10000-difficulty rule,
-listen port, then `PEER_LIST_REQUEST` and `BLOCK_REQUEST` by share id
-(the zero id asks for the tip). It exists so that a transpeer with no
-P2Pool node of its own can still fill its share store from the venue's
-overlay; it is tested against a Python double that speaks the same
-bytes and, like the merge-mining poller, is unverified against a real
-P2Pool until the testnet check.
+then `PEER_LIST_REQUEST` and `BLOCK_REQUEST` by share id (the zero id
+asks for the tip). `LISTEN_PORT` is not sent, so the observer is never
+advertised to other P2Pool peers as a share source; if P2Pool drops
+connections that omit it, the client reconnects. It exists so that a
+transpeer with no P2Pool node of its own can still fill its share store
+from the venue's overlay; it is tested against a Python double that
+speaks the same bytes and, like the merge-mining poller, is unverified
+against a real P2Pool until the testnet check.
 
 **Serving from the operator's daemons.** `--anchor-monerod URL` makes
 the node fill its anchor store from monerod's JSON-RPC
@@ -896,3 +898,15 @@ The reader runs as one more node loop, syncing every 60 s.
 node loop, with the sample drawn from commitments the reader itself
 verified; a transpeer's `uptime` from `/transpeer` gates the
 10-minute exemption.
+
+**Verification status of slice 3.** Verified locally, by tests against
+transcriptions of the P2Pool v4.18 and Monero v0.18.4.1 source: the
+share codec, including share id and aux proof; the Merkle and tree
+hashes; the difficulty rule; the header rules; and the P2P framing of
+the observer client, against a Python double. Unverified until the
+testnet check: a live tagged Monero block carried through the coinbase
+fetch; `pool_block_parser.inl` against real shares from a running
+venue; the observer handshake against a real p2pool; monerod's RPC
+shapes under `--anchor-monerod`; and the RandomX binding. The §6.7
+fallback to old commitments when no anchor view is available is
+deferred to slice 4.

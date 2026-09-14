@@ -60,7 +60,7 @@ Invariants and traps that have already cost time. Session status lives in
 
 - Defense policies are behind flags that default off (`--bucketed`,
   `--vouchers`, `--tried-table`, `--handoff-reserve`, `--native-vouchers`,
-  `--subnet-prefix`, `--anchor-publish`). Existing experiments depend on
+  `--subnet-prefix`, `--anchor-publish`, `--anchor-read`). Existing experiments depend on
   the defaults staying unchanged. The scanning-etiquette defaults (`--scan-rate`,
   `--scan-idle-rate`, `--scan-target-known`, sensitive-range exclusion)
   are production defaults and are deliberately *not* off; simulations

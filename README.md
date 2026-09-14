@@ -76,9 +76,51 @@ P2Pool with `--merge-mine 127.0.0.1:7338 <WALLET>`.
   (default 0.25) bound how much of a published list can be recently
   added.
 - **Blob endpoints.** The blob is served at `/blob/{hash}` and indexed
-  at `/blobs/index`. Readers of these commitments (the newcomer path)
-  are not yet implemented; see the specification's §17 for the build
-  order.
+  at `/blobs/index`. See "Reading the anchor" below for the newcomer
+  path that consumes these commitments.
+
+## Reading the anchor
+
+With `--anchor-read` (default off) the node runs the newcomer path: it
+verifies the Monero chain from a shipped checkpoint, resolves the
+merge-mining tags in that chain to P2Pool shares and the transpeer-list
+blobs they commit to, weights transpeers by the difficulty of the
+shares that vouch for them, and seeds its store with the result,
+marking those entries `published`. It then challenges other transpeers
+for the blobs and shares it has not yet verified, gossiping fetched
+commitments the same way `/transpeers` results are gossiped. Under
+this flag, blind scanning stops on coverage (resolved shares over
+tagged anchor-chain blocks) reaching 0.5, not on the live transpeer
+count.
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `--anchor-read` | off | Run the reader. Requires `--anchor-checkpoint`. |
+| `--anchor-checkpoint HEIGHT:HASH` | none | Trusted anchor-chain block shipped with a release. Required by `--anchor-read`. |
+| `--anchor-sim-pow` | off | Simulation only: SHA-256 in place of RandomX for anchor-chain and share proof-of-work. |
+| `--anchor-venues` | empty (main, mini, nano) | Comma-separated venue names or 64-hex consensus ids to read shares from. |
+| `--anchor-window-days` | 7 | Coverage window: the anchor chain's last N days (spec §8). |
+| `--anchor-monerod URL` | empty | monerod JSON-RPC URL to fill the anchor store from directly. Requires `--anchor-read`. |
+| `--anchor-observe HOST:PORT,...` | empty | P2Pool nodes to fill share stores from through the observer client (also accepts `name@host:port`). Requires `--anchor-read`. |
+
+The checkpoint is `HEIGHT:HASH`: a block height and its hex block
+hash on the Monero chain. `--anchor-sim-pow` is simulation-only; without
+it the reader requires a RandomX binding at start-up and refuses to run
+otherwise. `--anchor-monerod` and `--anchor-observe` are built to
+monerod's documented RPC and to P2Pool v4.18's source, but are
+unverified against real daemons.
+
+Under `--anchor-read` the node writes `anchor_chain.json` (the verified
+header chain) and `anchor_blobs.json` (transpeer-list blobs, shared with
+the publisher) directly under `data_dir`, and per-venue raw shares
+under `data_dir/venues/<hex>/`.
+
+**Tests.** `python tests/test_anchor_read.py` (138 passed),
+`python tests/test_anchor.py` (106 passed),
+`python tests/test_anchor_publish.py` (118 passed),
+`python tests/test_bucketed.py` (47 passed),
+`python tests/test_two_nodes.py` (24 passed),
+`python tests/test_scanner.py` (19 passed).
 
 See
 [docs/spec-chain-anchored-publication.md](docs/spec-chain-anchored-publication.md)
