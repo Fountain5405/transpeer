@@ -93,9 +93,15 @@ class BlobDB:
     def has_body_entry(self, addr: str, port: int) -> bool:
         return (addr, port) in self._entries
 
-    def index_since(self, since: int, limit: int = 500) -> list[tuple[bytes, int, list[Commitment]]]:
+    def index_since(self, since: int, limit: int = 500, after: bytes = b""
+                    ) -> list[tuple[bytes, int, list[Commitment]]]:
+        """Rows after the cursor (since, after) in (first_seen, hash) order.
+        With an empty `after` this is the old strictly-greater rule; with a
+        hash it resumes exactly where the previous page ended, so rows
+        that share a timestamp across a page boundary are not skipped."""
         rows = [(h, r.first_seen, list(r.commitments))
-                for h, r in self._blobs.items() if r.first_seen > since]
+                for h, r in self._blobs.items()
+                if r.first_seen > since or (after and r.first_seen == since and h > after)]
         rows.sort(key=lambda t: (t[1], t[0]))
         return rows[:limit]
 

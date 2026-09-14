@@ -264,13 +264,20 @@ class TranspeerServer:
         try:
             since = int(request.query.get("since", "0"))
             limit = max(1, min(int(request.query.get("limit", "500")), 500))
+            after = bytes.fromhex(request.query.get("after", ""))
+            if after and len(after) != 32:
+                raise ValueError
         except ValueError:
             return web.json_response({"error": "bad query"}, status=400)
-        rows = self.blobdb.index_since(since, limit) if self.blobdb is not None else []
+        rows = self.blobdb.index_since(since, limit, after) if self.blobdb is not None else []
         blobs = [{"hash": h.hex(), "first_seen": fs, "commitments": [c.to_dict() for c in cs]}
                  for h, fs, cs in rows]
-        next_since = rows[-1][1] if len(rows) == limit else None
-        return web.json_response({"blobs": blobs, "next_since": next_since})
+        full = len(rows) == limit
+        return web.json_response({
+            "blobs": blobs,
+            "next_since": rows[-1][1] if full else None,
+            "next_after": rows[-1][0].hex() if full else None,
+        })
 
     def create_app(self) -> web.Application:
         app = web.Application()
