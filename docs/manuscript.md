@@ -1196,7 +1196,7 @@ post-rebase values (old to new: `de02f26`→`83b3596`, `b769837`→`d9f09e4`,
 | `2b16d6a`, `bcd5169` | adaptive handshake PoW and its experiment (§8.2), earlier |
 | `f98736a` | attacker_ratio (§8.3), earlier |
 | `0c1ee25` | chain-anchored publication, slices 1–2: blob, Merkle, blob DB, weighting, publisher, aux RPC, blob endpoints (no measurements) |
-| `TBD` | chain-anchored publication slice 3 (reader): header verification, share codec, anchor and venue endpoints, weighting and scan-stop by coverage, gossip, faithfulness challenges, observer client and monerod source (no measurements) |
+| `e6d4493` | chain-anchored publication slice 3 (reader): header verification, share codec, anchor and venue endpoints, weighting and scan-stop by coverage, gossip, faithfulness challenges, observer client and monerod source (no measurements) |
 
 Each experiment folder under `sim/tests/` holds `gen_config.py`,
 `run_experiment.sh`, committed `configs/*.yaml`, a `results*.txt` CSV with
