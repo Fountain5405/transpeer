@@ -105,9 +105,66 @@ def test_pow_backends():
     check(backend_for(Config(anchor_sim_pow=True)).name == "sha256", "backend_for picks sha256 under the sim flag")
 
 
+def make_chain(n, pow, start_ts=1_700_000_000, difficulty=50, spacing=120, first=0, prev=bytes(32)):
+    """n hashing blobs with valid linkage and PoW at constant difficulty."""
+    from transpeer.anchor.monero import build_block_blob, hashing_blob, block_id
+    from transpeer.anchor.powhash import mine
+    from transpeer.anchor.headers import HeaderRow
+    rows, blobs = [], []
+    for i in range(n):
+        h = first + i
+        ts = start_ts + spacing * i
+        def mk(nonce, h=h, ts=ts, prev=prev):
+            return hashing_blob(build_block_blob(16, 16, ts, prev, nonce, h, b"\x01" + bytes(32)))
+        _, hb = mine(mk, difficulty, pow, h)
+        rows.append(HeaderRow(h, hb, difficulty))
+        blobs.append(hb)
+        prev = block_id(hb)
+    return rows
+
+
+def test_headers():
+    print("header chain")
+    import random
+    from transpeer.anchor.headers import (verify_headers, Checkpoint, parse_checkpoint, HeaderError,
+                                          HeaderRow, best_view)
+    from transpeer.anchor.monero import block_id
+    from transpeer.anchor.powhash import Sha256Pow
+    pow = Sha256Pow()
+    rows = make_chain(40, pow)
+    cp = Checkpoint(10, block_id(rows[10].blob))
+    now = 1_700_000_000 + 120 * 39 + 60
+    v = verify_headers(rows, cp, pow, now, rng=random.Random(1))
+    check(v.tip_height == 39 and v.tip_id == block_id(rows[-1].blob), "view tip")
+    check(v.work == 50 * 40 and v.height_of(cp.hash) == 10, "cumulative work and lookup")
+    check(parse_checkpoint(f"10:{cp.hash.hex()}") == cp, "parse_checkpoint")
+    bad = list(rows); bad[20] = HeaderRow(20, rows[20].blob, 51)
+    try:
+        verify_headers(bad, cp, pow, now); check(False, "difficulty mismatch after checkpoint rejected")
+    except HeaderError as e:
+        check("20" in str(e), "difficulty mismatch names the height")
+    try:
+        verify_headers(rows, Checkpoint(10, bytes(32)), pow, now); check(False, "checkpoint mismatch rejected")
+    except HeaderError:
+        check(True, "checkpoint mismatch rejected")
+    try:
+        verify_headers(rows, cp, pow, now + 4000); check(False, "stale tip rejected")
+    except HeaderError as e:
+        check("stale" in str(e), "stale tip rejected")
+    fake = rows[:30] + make_chain(1, pow, first=30, prev=bytes(32), start_ts=1_700_000_000 + 120 * 30)
+    try:
+        verify_headers(fake, cp, pow, now); check(False, "broken linkage rejected")
+    except HeaderError:
+        check(True, "broken linkage rejected")
+    longer = make_chain(45, pow)
+    v2 = verify_headers(longer, Checkpoint(10, block_id(longer[10].blob)), pow, now + 600, rng=random.Random(1))
+    check(best_view([v, v2]) is v2, "best_view picks the most work")
+
+
 if __name__ == "__main__":
     test_index_cursor()
     test_monero_hashing()
     test_pow_backends()
+    test_headers()
     print(f"\n{passed} passed, {failed} failed")
     sys.exit(1 if failed else 0)
