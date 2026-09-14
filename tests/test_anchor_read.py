@@ -7,6 +7,7 @@ Run:  PYTHONPATH=$PWD .venv/bin/python tests/test_anchor_read.py
 import asyncio
 import hashlib
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -208,11 +209,108 @@ def test_share_codec():
         check(True, "uint64 reward overflow rejected")
 
 
+def test_stores():
+    print("anchor and share stores")
+    from transpeer.anchor import CHAIN_ID
+    from transpeer.anchor.headers import HeaderRow
+    from transpeer.anchor.share import VENUES, parse_share, mine_share
+    from transpeer.anchor.powhash import Sha256Pow
+    from transpeer.anchor.stores import AnchorStore, ShareStore, venue_dir
+    pow = Sha256Pow()
+
+    # AnchorStore: header round trip through disk
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "anchor.json"
+        store = AnchorStore(path)
+        rows = make_chain(5, pow)
+        store.put_headers(rows)
+        for r in rows:
+            store.put_block(r.height, r.blob)
+        check(store.tip_height() == 4, "tip_height is the highest header")
+        store.save()
+
+        store2 = AnchorStore(path)
+        store2.load()
+        got = store2.header_rows(2, 10)
+        check(len(got) == 3, "header_rows returns the contiguous tail from height 2")
+        check(got[0].height == 2 and got[-1].height == 4, "header_rows heights")
+        check(store2.block(2) == rows[2].blob, "block blob round trips")
+        check(store2.block(99) is None, "missing block is None")
+
+        store2.prune(3)
+        check(store2.tip_height() == 4 and store2.header_rows(3, 10)[0].height == 3
+              and store2.header_rows(0, 10) == [],
+              "prune drops headers below keep_from_height")
+
+        missing = AnchorStore(Path(tmp) / "nope.json")
+        missing.load()
+        check(missing.tip_height() is None and missing.view is None,
+              "missing/unparsable file loads empty")
+
+    # in-memory only: save/load are no-ops
+    mem = AnchorStore(None)
+    mem.put_headers(rows)
+    mem.save()
+    mem.load()
+    check(mem.tip_height() == 4, "path=None store keeps state without touching disk")
+
+    # ShareStore: build two chained shares
+    venue = VENUES["mini"]
+    blob_hash = hashlib.sha256(b"blob").digest()
+    kw = dict(consensus_id=venue, txin_gen_height=3000000, prev_id=bytes(32), timestamp=1_700_000_000,
+              parent=bytes(32), height=0, difficulty=300, cumulative_difficulty=300,
+              aux={CHAIN_ID: (blob_hash, 100000)})
+    raw1 = mine_share(kw, pow)
+    s1 = parse_share(raw1, venue)
+    raw2 = mine_share(dict(kw, parent=s1.id, height=1, cumulative_difficulty=600, aux={}), pow)
+    s2 = parse_share(raw2, venue)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir = Path(tmp)
+        vdir = venue_dir(data_dir, venue)
+        check(vdir == data_dir / "venues" / venue.hex(), "venue_dir layout")
+        store = ShareStore(venue, vdir)
+        check(store.add(s1) is True, "add returns True for a new share")
+        check(store.add(s1) is False, "add returns False when already present")
+        check(store.add(s2) is True, "add second share")
+        check(store.get(s1.id) == s1, "get by id")
+        check(store.raw(s1.id) == raw1, "raw returns the original bytes")
+        check(store.by_root(s1.merkle_root) == s1, "by_root looks up by merkle root")
+        check(store.tip() == s2, "tip is the highest cumulative difficulty")
+        walked = store.walk(s2.id, 10)
+        check(walked == [s2, s1], "walk follows parent to parent, stopping at unknown parent")
+        check(store.walk(s2.id, 1) == [s2], "walk stops at count")
+        check(store.count() == 2, "count")
+
+        reloaded = ShareStore(venue, vdir)
+        reloaded.load()
+        check(reloaded.count() == 2, "load rebuilds the index from disk")
+        check(reloaded.get(s1.id) == s1 and reloaded.get(s2.id) == s2, "reloaded shares parse identically")
+
+        # tamper with one file on disk: load must drop it, not raise
+        bad_path = vdir / s1.id.hex()
+        data = bytearray(bad_path.read_bytes())
+        data[-1] ^= 1
+        bad_path.write_bytes(bytes(data))
+        reloaded2 = ShareStore(venue, vdir)
+        reloaded2.load()
+        check(reloaded2.count() == 1 and reloaded2.get(s1.id) is None,
+              "tampered file fails to parse and is deleted at load")
+        check(not bad_path.exists(), "tampered file removed from disk")
+
+        # prune removes shares below the window
+        old = ShareStore(venue, None)
+        old.add(s1); old.add(s2)
+        old.prune(tip_height=10000, window=1)
+        check(old.count() == 0, "prune drops shares below tip_height - 4*window")
+
+
 if __name__ == "__main__":
     test_index_cursor()
     test_monero_hashing()
     test_pow_backends()
     test_headers()
     test_share_codec()
+    test_stores()
     print(f"\n{passed} passed, {failed} failed")
     sys.exit(1 if failed else 0)
