@@ -130,17 +130,42 @@ class Reader:
                     from_height = max(0, checkpoint.height - DIFFICULTY_BLOCKS_COUNT)
                 rows = []
                 cur = from_height
+                abandoned = False
                 while cur <= tip:
                     count = min(HEADER_PAGE, tip - cur + 1)
                     page = await self.client.fetch_headers(addr, port, chain, cur, count)
+                    if not page or page[0].height != cur:
+                        logger.warning("READER: %s:%d served an empty or misaligned "
+                                       "header page at %d", addr, port, cur)
+                        abandoned = True
+                        break
+                    ok = True
+                    for i in range(1, len(page)):
+                        if page[i].height != page[i - 1].height + 1:
+                            ok = False
+                            break
+                    if not ok:
+                        logger.warning("READER: %s:%d served a non-contiguous header page "
+                                       "at %d", addr, port, cur)
+                        abandoned = True
+                        break
+                    # Never trust a page past the tip we asked for.
+                    page = [row for row in page if row.height <= tip]
                     if not page:
                         break
                     rows.extend(page)
-                    cur = page[-1].height + 1
+                    progressed = page[-1].height + 1
+                    if progressed <= cur:
+                        logger.warning("READER: %s:%d header page made no progress at %d",
+                                       addr, port, cur)
+                        abandoned = True
+                        break
+                    cur = progressed
                     if len(page) < count:
                         break
-                if not rows:
-                    logger.warning("READER: no headers from %s:%d", addr, port)
+                if abandoned or not rows:
+                    if not abandoned:
+                        logger.warning("READER: no headers from %s:%d", addr, port)
                     continue
                 kwargs = {"rng": self.rng} if self.rng is not None else {}
                 view = verify_headers(rows, checkpoint, self.pow, now, **kwargs)
@@ -231,7 +256,12 @@ class Reader:
 
     async def _step4_canonical_fork(self, sources: list, venue_tips: dict) -> dict:
         """Canonical fork: walk each venue's tip back through the weight
-        window, fetching missing ancestors."""
+        window, fetching missing ancestors. Every fetched batch must be
+        anchored to the parent id we asked for -- batch[0].id == parent,
+        and each following share is the previous one's named parent, one
+        height lower -- so a source cannot feed unrelated shares forever;
+        the walk is also hard-capped at VENUE_WINDOW regardless of what
+        any source does."""
         canonical = {}
         for cid, tip_id in venue_tips.items():
             venue_store = self.shares.setdefault(cid, ShareStore(cid, None))
@@ -246,20 +276,31 @@ class Reader:
                     if not raw_list:
                         continue
                     batch_added = 0
-                    prev = None
+                    expected_id = parent
+                    prev_height = None
                     for raw in raw_list:
                         try:
                             share = parse_share(raw, cid)
                         except ValueError:
+                            logger.warning("READER: %s:%d served an unparseable share "
+                                           "in venue %s", addr, port, cid.hex())
                             break
                         if not verify_share_pow(share, self.pow):
+                            logger.warning("READER: %s:%d served a share with invalid "
+                                           "PoW in venue %s", addr, port, cid.hex())
                             break
-                        if prev is not None and (share.id != prev.parent
-                                                  or share.height != prev.height - 1):
+                        if share.id != expected_id or (
+                                prev_height is not None and share.height != prev_height - 1):
+                            logger.warning("READER: %s:%d served a share batch not "
+                                           "anchored to the requested parent in venue %s; "
+                                           "dropping the rest of the batch", addr, port, cid.hex())
                             break
                         if venue_store.add(share):
                             batch_added += 1
-                        prev = share
+                        expected_id = share.parent
+                        prev_height = share.height
+                        if len(chain) + batch_added >= VENUE_WINDOW:
+                            break
                     added += batch_added
                     if batch_added:
                         break
@@ -333,7 +374,7 @@ class Reader:
 
     async def gossip(self, addr: str, port: int) -> int:
         since, after = self._cursors.get((addr, port), (0, b""))
-        rows, _next_since, _next_after = await self.client.fetch_index(addr, port, since, after)
+        rows, next_since, next_after = await self.client.fetch_index(addr, port, since, after)
         stored = 0
         ok = True
         for row in rows:
@@ -345,11 +386,17 @@ class Reader:
             if not processed:
                 ok = False
         if ok and rows:
-            last = rows[-1]
-            try:
-                self._cursors[(addr, port)] = (int(last["first_seen"]), bytes.fromhex(last["hash"]))
-            except (KeyError, ValueError, TypeError):
-                pass
+            # The response names next_since/next_after (spec §5) when the
+            # page was full; when it wasn't, there is no next page, so
+            # resume just after the last row we processed.
+            if next_since is not None and next_after is not None:
+                self._cursors[(addr, port)] = (next_since, next_after)
+            else:
+                last = rows[-1]
+                try:
+                    self._cursors[(addr, port)] = (int(last["first_seen"]), bytes.fromhex(last["hash"]))
+                except (KeyError, ValueError, TypeError):
+                    pass
         return stored
 
     async def _gossip_row(self, addr: str, port: int, row: dict):

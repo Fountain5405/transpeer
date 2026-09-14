@@ -648,6 +648,170 @@ async def test_reader():
             await r_store.close()
 
 
+async def test_reader_hostile_headers():
+    print("reader: hostile header source cannot hang the paging loop")
+    from aiohttp import web
+    from transpeer.config import Config
+    from transpeer.peerstore import PeerStore
+    from transpeer.anchor.blobdb import BlobDB
+    from transpeer.anchor.fetch import AnchorClient
+    from transpeer.anchor.powhash import Sha256Pow
+    from transpeer.anchor.reader import Reader
+    from transpeer.anchor.stores import AnchorStore
+
+    async def headers_handler(request):
+        # Always the same 720 rows starting at height 0, whatever `from`
+        # was, and a tip far past anything ever served.
+        rows = [{"height": i, "blob": "00" * 40, "difficulty": 50} for i in range(720)]
+        return web.json_response({"chain": "monero", "tip": 5000, "headers": rows})
+
+    app = web.Application()
+    app.router.add_get("/anchor/{chain}/headers", headers_handler)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 17355)
+    await site.start()
+
+    cfg = Config(in_memory=True, no_verify=True, anchor_chain="monero",
+                anchor_checkpoint=f"5:{'00' * 32}", port=17391, bind="127.0.0.1")
+    store = PeerStore(cfg)
+    await store.init()
+    try:
+        client = AnchorClient(cfg)
+        reader = Reader(cfg, store, BlobDB(), AnchorStore(None), {}, client, Sha256Pow())
+        state = await asyncio.wait_for(reader.sync([("127.0.0.1", 17355)]), timeout=10)
+        check(not state.bootstrapped, "hostile header source: sync returns, not bootstrapped")
+    finally:
+        await runner.cleanup()
+        await store.close()
+
+
+async def test_reader_hostile_fork():
+    print("reader: hostile share source cannot extend the fork walk")
+    from aiohttp import web
+    from transpeer.config import Config
+    from transpeer.peerstore import PeerStore
+    from transpeer.anchor import CHAIN_ID
+    from transpeer.anchor.blob import blob_hash as _blob_hash, encode_blob
+    from transpeer.anchor.blobdb import BlobDB
+    from transpeer.anchor.fetch import AnchorClient
+    from transpeer.anchor.headers import Checkpoint, HeaderRow
+    from transpeer.anchor.merkle import build_mm_tag
+    from transpeer.anchor.monero import build_block_blob, hashing_blob, block_id, check_hash
+    from transpeer.anchor.powhash import Sha256Pow
+    from transpeer.anchor.reader import Reader
+    from transpeer.anchor.share import VENUES, mine_share, parse_share
+    from transpeer.anchor.stores import AnchorStore
+
+    pow = Sha256Pow()
+    venue = VENUES["mini"]
+    blob = encode_blob("monero", 1, [("20.5.0.1", 7337)])
+    h_blob = _blob_hash(blob)
+    dangling_parent = hashlib.sha256(b"dangling-parent").digest()
+
+    kw = dict(consensus_id=venue, txin_gen_height=3, prev_id=bytes(32), timestamp=1_700_000_000,
+              parent=dangling_parent, height=100, difficulty=300, cumulative_difficulty=30100,
+              aux={CHAIN_ID: (h_blob, 100000)})
+    tip_share = parse_share(mine_share(kw, pow), venue)
+
+    # 64 individually-valid shares (parse and PoW both check out) a
+    # hostile source serves for every /venue/{id}/shares request,
+    # regardless of `from`: unrelated to the fork it is supposed to walk.
+    junk_shares = []
+    jparent = bytes(32)
+    for i in range(64):
+        jkw = dict(consensus_id=venue, txin_gen_height=3, prev_id=bytes(32),
+                  timestamp=1_700_000_000 + i, parent=jparent, height=i,
+                  difficulty=300, cumulative_difficulty=300 * (i + 1), aux={})
+        jshare = parse_share(mine_share(jkw, pow), venue)
+        junk_shares.append(jshare)
+        jparent = jshare.id
+
+    # Tiny anchor chain: 3 blocks, checkpoint at the tip, tag at height 2.
+    rows, blocks = [], {}
+    prev = bytes(32)
+    start_ts = 1_700_000_000
+    difficulty = 50
+    for height in range(3):
+        ts = start_ts + 120 * height
+        if height == 2:
+            tag = build_mm_tag(tip_share.n_aux_chains, tip_share.aux_nonce, tip_share.merkle_root)
+            tx_extra = b"\x01" + bytes(32) + tag
+        else:
+            tx_extra = b"\x01" + bytes(32)
+        nonce = 0
+        while True:
+            block = build_block_blob(16, 16, ts, prev, nonce, height, tx_extra)
+            hb = hashing_blob(block)
+            if check_hash(pow.hash(hb, height, bytes(32)), difficulty):
+                break
+            nonce += 1
+        rows.append(HeaderRow(height, hb, difficulty))
+        blocks[height] = block
+        prev = block_id(hb)
+    checkpoint = Checkpoint(2, block_id(rows[2].blob))
+
+    async def anchor_headers(request):
+        frm = int(request.query.get("from", 0))
+        count = int(request.query.get("count", len(rows)))
+        page = [r for r in rows if r.height >= frm][:count]
+        return web.json_response({
+            "chain": "monero", "tip": rows[-1].height,
+            "headers": [{"height": r.height, "blob": r.blob.hex(), "difficulty": r.difficulty}
+                        for r in page],
+        })
+
+    async def anchor_coinbase(request):
+        height = int(request.match_info["height"])
+        blob = blocks.get(height)
+        if blob is None:
+            return web.json_response({"error": "unknown"}, status=404)
+        return web.Response(body=blob, content_type="application/octet-stream")
+
+    async def venue_share_by_root(request):
+        root = bytes.fromhex(request.match_info["root"])
+        if root == tip_share.merkle_root:
+            return web.Response(body=tip_share.raw, content_type="application/octet-stream")
+        return web.json_response({"error": "unknown"}, status=404)
+
+    async def venue_shares_hostile(request):
+        return web.json_response({"shares": [s.raw.hex() for s in junk_shares]})
+
+    app = web.Application()
+    app.router.add_get("/anchor/{chain}/headers", anchor_headers)
+    app.router.add_get("/anchor/{chain}/coinbase/{height}", anchor_coinbase)
+    app.router.add_get(f"/venue/{venue.hex()}/share_by_root/{{root}}", venue_share_by_root)
+    app.router.add_get(f"/venue/{venue.hex()}/shares", venue_shares_hostile)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 17356)
+    await site.start()
+
+    cfg = Config(in_memory=True, no_verify=True, anchor_chain="monero",
+                anchor_checkpoint=f"2:{checkpoint.hash.hex()}",
+                anchor_venues="mini", anchor_window_days=1.0,
+                port=17392, bind="127.0.0.1")
+    store = PeerStore(cfg)
+    await store.init()
+    now = start_ts + 120 * 2 + 60
+    try:
+        client = AnchorClient(cfg)
+        r_db = BlobDB()
+        reader = Reader(cfg, store, r_db, AnchorStore(None), {}, client, pow, clock=lambda: now)
+        state = await asyncio.wait_for(reader.sync([("127.0.0.1", 17356)]), timeout=10)
+        check(state.bootstrapped, "sync terminates and bootstraps despite the hostile fork source")
+        check(state.venues.get(venue) == tip_share.id, "canonical tip is the resolved share")
+        venue_store = reader.shares[venue]
+        window = venue_store.walk(tip_share.id, 2160)
+        check(window == [tip_share],
+              "canonical window contains only the anchored share, none of the junk")
+        check(all(venue_store.get(s.id) is None for s in junk_shares),
+              "none of the hostile source's unrelated shares were stored")
+    finally:
+        await runner.cleanup()
+        await store.close()
+
+
 if __name__ == "__main__":
     test_index_cursor()
     test_monero_hashing()
@@ -657,5 +821,7 @@ if __name__ == "__main__":
     test_stores()
     asyncio.run(test_endpoints_and_client())
     asyncio.run(test_reader())
+    asyncio.run(test_reader_hostile_headers())
+    asyncio.run(test_reader_hostile_fork())
     print(f"\n{passed} passed, {failed} failed")
     sys.exit(1 if failed else 0)
