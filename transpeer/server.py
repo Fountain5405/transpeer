@@ -326,7 +326,12 @@ class TranspeerServer:
             return web.json_response({"error": "anchor not configured"}, status=404)
         if not self._check_rate_limit(request.remote):
             return web.json_response({"error": "rate limited"}, status=429)
-        return web.json_response({"venues": [v.hex() for v in self.share_stores]})
+        from .anchor.reader import venues_from_config
+        configured = venues_from_config(self.config)
+        # A venue discovered from a tag but holding nothing is not worth
+        # re-advertising: it would spread a source's junk venue ids.
+        return web.json_response({"venues": [v.hex() for v, store in self.share_stores.items()
+                                             if v in configured or store.count() > 0]})
 
     def _venue_store(self, request: web.Request):
         """Resolve {id} as 64 hex chars to a ShareStore, or a (400/404)

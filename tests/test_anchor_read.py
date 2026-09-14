@@ -6,6 +6,7 @@ Run:  PYTHONPATH=$PWD .venv/bin/python tests/test_anchor_read.py
 
 import asyncio
 import hashlib
+import logging
 import sys
 import tempfile
 import time
@@ -766,10 +767,10 @@ async def test_reader_resync():
     srv_db.add(world["blobs"]["A"], Commitment(world["hash_a"], "template", "v", "", "p", 0, 0), now)
     srv_db.add(world["blobs"]["B"], Commitment(world["hash_b"], "template", "v", "", "p", 0, 0), now)
 
-    def grow(n, from_height):
+    def grow(n, from_height, ts_shift=0):
         prev = block_id(srv_anchor.headers[from_height - 1].blob)
         for h in range(from_height, from_height + n):
-            row, block = mine_block(pow, h, start_ts + 120 * h, prev)
+            row, block = mine_block(pow, h, start_ts + 120 * h + ts_shift, prev)
             srv_anchor.put_headers([row])
             srv_anchor.put_block(h, block)
             prev = block_id(row.blob)
@@ -806,12 +807,35 @@ async def test_reader_resync():
         check(all(boot), "bootstrapped stays true across syncs")
 
         # Reorg: the last two blocks are replaced by three different ones.
+        # The replacements are mined 30 s later than the blocks they
+        # replace, so that they really are different blocks: mine_block is
+        # deterministic in (height, timestamp, prev).
+        old_44 = block_id(srv_anchor.headers[44].blob)
         for h in (44, 45):
             del srv_anchor.headers[h]
             del srv_anchor.blocks[h]
-        grow(3, 44)
-        st = await asyncio.wait_for(reader.sync([("127.0.0.1", 17359)]), timeout=30)
+        grow(3, 44, ts_shift=30)
+        new_44 = block_id(srv_anchor.headers[44].blob)
+        check(new_44 != old_44, "the replacement blocks differ from the ones they replace")
+
+        log = logging.getLogger("transpeer.anchor.reader")
+        records = []
+
+        class _Capture(logging.Handler):
+            def emit(self, record):
+                records.append(record.getMessage())
+
+        handler = _Capture()
+        log.addHandler(handler)
+        try:
+            st = await asyncio.wait_for(reader.sync([("127.0.0.1", 17359)]), timeout=30)
+        finally:
+            log.removeHandler(handler)
+        check(any("does not extend the stored tip" in m for m in records),
+              "the extension fails and the reader falls back to a full refetch")
         check(st.tip_height == 46, f"reader follows the longer reorganised chain: {st.tip_height}")
+        check(reader.anchor.view.id_at(44) == new_44 != old_44,
+              f"the view at the reorg height is the replacement block")
         check(reader.anchor.view.tip_id == block_id(srv_anchor.headers[46].blob),
               "the reader's tip is the serving node's new tip")
         check(st.bootstrapped, "still bootstrapped after the reorg")
@@ -821,6 +845,233 @@ async def test_reader_resync():
         if r_store is not None:
             await r_store.close()
 
+
+
+def grow_one(pow, srv_anchor, hist_ts, hist_cum, height, ts):
+    """Mine one block onto the serving node's chain at `height`/`ts`, at
+    the difficulty the rule demands for that spacing. `hist_ts`/`hist_cum`
+    are the chain's timestamps and cumulative difficulties from height 0
+    and are extended in place."""
+    from transpeer.anchor.monero import DIFFICULTY_BLOCKS_COUNT, block_id, next_difficulty
+    d = next_difficulty(hist_ts[-DIFFICULTY_BLOCKS_COUNT:], hist_cum[-DIFFICULTY_BLOCKS_COUNT:])
+    prev = block_id(srv_anchor.headers[height - 1].blob)
+    row, block = mine_block(pow, height, ts, prev, difficulty=d)
+    srv_anchor.put_headers([row])
+    srv_anchor.put_block(height, block)
+    hist_ts.append(ts)
+    hist_cum.append(hist_cum[-1] + d)
+    return row
+
+
+async def _serve_world(world, port, name, now):
+    """A TranspeerServer on `port` serving the whole of build_world()."""
+    from aiohttp import web
+    from transpeer.config import Config
+    from transpeer.peerstore import PeerStore
+    from transpeer.server import TranspeerServer
+    from transpeer.anchor.blobdb import BlobDB, Commitment
+    from transpeer.anchor.stores import AnchorStore, ShareStore
+
+    venue = world["venue"]
+    srv_anchor = AnchorStore(None)
+    srv_anchor.put_headers(world["rows"])
+    for h, blob in world["blocks"].items():
+        srv_anchor.put_block(h, blob)
+    srv_shares = ShareStore(venue, None)
+    for sh in world["shares"]:
+        srv_shares.add(sh)
+    srv_db = BlobDB()
+    srv_db.add(world["blobs"]["A"], Commitment(world["hash_a"], "template", "v", "", "p", 0, 0), now)
+    srv_db.add(world["blobs"]["B"], Commitment(world["hash_b"], "template", "v", "", "p", 0, 0), now)
+    cfg = Config(in_memory=True, no_verify=True, anchor_chain="monero",
+                 port=port, bind="127.0.0.1")
+    srv_store = PeerStore(cfg)
+    await srv_store.init()
+    srv = TranspeerServer(cfg, srv_store, name, time.time(), network_names=["monero"],
+                          blobdb=srv_db, anchor_store=srv_anchor, share_stores={venue: srv_shares})
+    runner = web.AppRunner(srv.create_app())
+    await runner.setup()
+    await web.TCPSite(runner, "127.0.0.1", port).start()
+    return runner, srv_store, srv_anchor, srv
+
+
+async def test_reader_stale_stored_view():
+    print("reader: a stored view whose tip has gone stale is not a current view")
+    from transpeer.config import Config
+    from transpeer.peerstore import PeerStore
+    from transpeer.anchor.blobdb import BlobDB
+    from transpeer.anchor.fetch import AnchorClient
+    from transpeer.anchor.powhash import Sha256Pow
+    from transpeer.anchor.reader import Reader
+    from transpeer.anchor.stores import AnchorStore
+
+    pow = Sha256Pow()
+    world = build_world(pow)
+    checkpoint = world["checkpoint"]
+    start_ts = 1_700_000_000
+    clock = [start_ts + 120 * 40]
+    hist_ts = [start_ts + 120 * h for h in range(40)]
+    hist_cum = [50 * (h + 1) for h in range(40)]
+
+    runner, srv_store, srv_anchor, _srv = await _serve_world(
+        world, 17359, "stale_srv", clock[0])
+    r_store = None
+    try:
+        rcfg = Config(in_memory=True, no_verify=True, anchor_chain="monero",
+                      anchor_checkpoint=f"5:{checkpoint.hash.hex()}", anchor_venues="mini",
+                      anchor_window_days=10 * 120 / 86400, port=17362, bind="127.0.0.1")
+        r_store = PeerStore(rcfg)
+        await r_store.init()
+        reader = Reader(rcfg, r_store, BlobDB(), AnchorStore(None), {}, AnchorClient(rcfg),
+                        pow, clock=lambda: clock[0])
+        sources = [("127.0.0.1", 17359)]
+        st = await asyncio.wait_for(reader.sync(sources), timeout=60)
+        check(st.bootstrapped and st.tip_height == 39, "first sync bootstraps at tip 39")
+
+        clock[0] += 4000                      # more than STALE_TIP, source frozen
+        st = await asyncio.wait_for(reader.sync(sources), timeout=60)
+        check(not st.bootstrapped,
+              "a frozen source cannot keep the reader bootstrapped on a stale stored view")
+        check(st.tip_height == 39 and st.coverage > 0,
+              f"the rest of the state is untouched: tip={st.tip_height} cov={st.coverage}")
+
+        for i, height in enumerate((40, 41, 42)):
+            grow_one(pow, srv_anchor, hist_ts, hist_cum, height, clock[0] - 90 + 30 * i)
+        st = await asyncio.wait_for(reader.sync(sources), timeout=60)
+        check(st.bootstrapped and st.tip_height == 42,
+              f"a source with a fresh tip bootstraps again: {st.tip_height}/{st.bootstrapped}")
+    finally:
+        await runner.cleanup()
+        await srv_store.close()
+        if r_store is not None:
+            await r_store.close()
+
+
+async def test_reader_discovered_venue_bound():
+    print("reader: discovered venues are bounded, and expire when empty and unadvertised")
+    from aiohttp import web
+    from transpeer.config import Config
+    from transpeer.peerstore import PeerStore
+    from transpeer.server import TranspeerServer
+    from transpeer.anchor.blobdb import BlobDB
+    from transpeer.anchor.fetch import AnchorClient
+    from transpeer.anchor.powhash import Sha256Pow
+    from transpeer.anchor.reader import MAX_DISCOVERED_VENUES, Reader
+    from transpeer.anchor.stores import AnchorStore
+
+    pow = Sha256Pow()
+    world = build_world(pow)
+    venue, checkpoint = world["venue"], world["checkpoint"]
+    start_ts = 1_700_000_000
+    clock = [start_ts + 120 * 40]
+    hist_ts = [start_ts + 120 * h for h in range(40)]
+    hist_cum = [50 * (h + 1) for h in range(40)]
+    junk = [hashlib.sha256(f"junk{i}".encode()).digest() for i in range(40)]
+
+    async def junk_venues(request):
+        return web.json_response({"venues": [v.hex() for v in junk]})
+
+    app = web.Application()
+    app.router.add_get("/venues", junk_venues)
+    junk_runner = web.AppRunner(app)
+    await junk_runner.setup()
+    await web.TCPSite(junk_runner, "127.0.0.1", 17358).start()
+
+    runner, srv_store, srv_anchor, srv = await _serve_world(
+        world, 17359, "bound_srv", clock[0])
+    r_store = None
+    r_runner = None
+    try:
+        rcfg = Config(in_memory=True, no_verify=True, anchor_chain="monero",
+                      anchor_checkpoint=f"5:{checkpoint.hash.hex()}", anchor_venues="mini",
+                      anchor_window_days=10 * 120 / 86400, port=17357, bind="127.0.0.1")
+        r_store = PeerStore(rcfg)
+        await r_store.init()
+        r_anchor = AnchorStore(None)
+        reader = Reader(rcfg, r_store, BlobDB(), r_anchor, {}, AnchorClient(rcfg),
+                        pow, clock=lambda: clock[0])
+        sources = [("127.0.0.1", 17359), ("127.0.0.1", 17358)]
+        await asyncio.wait_for(reader.sync(sources), timeout=60)
+        check(len(reader.discovered) == MAX_DISCOVERED_VENUES,
+              f"40 advertised venues yield 16 discovered: {len(reader.discovered)}")
+        check(len(reader.shares) <= MAX_DISCOVERED_VENUES + 1,
+              f"at most 16 discovered stores, plus the configured one: {len(reader.shares)}")
+
+        r_srv = TranspeerServer(rcfg, r_store, "reader_srv", time.time(),
+                                network_names=["monero"], blobdb=reader.blobdb,
+                                anchor_store=r_anchor, share_stores=reader.shares)
+        r_runner = web.AppRunner(r_srv.create_app())
+        await r_runner.setup()
+        await web.TCPSite(r_runner, "127.0.0.1", 17357).start()
+        import aiohttp
+        async with aiohttp.ClientSession() as sess:
+            async with sess.get("http://127.0.0.1:17357/venues") as resp:
+                served = set((await resp.json())["venues"])
+        check(served == {venue.hex()},
+              f"/venues re-advertises only the configured and non-empty venues: {len(served)}")
+
+        # A day later, with nothing advertising them, the empty ones go.
+        clock[0] += 86401
+        # Resolving 16 junk venues costs the serving node a request per
+        # venue per tagged block: forget that the first sync used up its
+        # rate-limit window, which a day later would have expired anyway.
+        srv._rate_limits.clear()
+        grow_one(pow, srv_anchor, hist_ts, hist_cum, 40, clock[0] - 60)
+        await asyncio.wait_for(reader.sync([("127.0.0.1", 17359)]), timeout=60)
+        check(not reader.discovered, f"idle empty venues are forgotten: {len(reader.discovered)}")
+        check(set(reader.shares) == {venue},
+              f"their stores are dropped too: {len(reader.shares)}")
+    finally:
+        await junk_runner.cleanup()
+        if r_runner is not None:
+            await r_runner.cleanup()
+        await runner.cleanup()
+        await srv_store.close()
+        if r_store is not None:
+            await r_store.close()
+
+
+async def test_client_json_shapes():
+    print("reader: a JSON array or scalar where an object is due is just a malformed reply")
+    from aiohttp import web
+    from transpeer.config import Config
+    from transpeer.peerstore import PeerStore
+    from transpeer.anchor.blobdb import BlobDB
+    from transpeer.anchor.fetch import AnchorClient
+    from transpeer.anchor.powhash import Sha256Pow
+    from transpeer.anchor.reader import Reader
+    from transpeer.anchor.stores import AnchorStore
+
+    app = web.Application()
+    app.router.add_get("/anchor/{chain}/headers", lambda r: web.json_response([]))
+    app.router.add_get("/blobs/index", lambda r: web.json_response("x"))
+    app.router.add_get("/venues", lambda r: web.json_response(7))
+    app.router.add_get("/venue/{id}/shares", lambda r: web.json_response(["zz", 3]))
+    runner = web.AppRunner(app)
+    await runner.setup()
+    await web.TCPSite(runner, "127.0.0.1", 17356).start()
+
+    cfg = Config(in_memory=True, no_verify=True, anchor_chain="monero",
+                 anchor_checkpoint=f"5:{'00' * 32}", port=17362, bind="127.0.0.1")
+    store = PeerStore(cfg)
+    await store.init()
+    try:
+        client = AnchorClient(cfg)
+        check(await client.fetch_headers("127.0.0.1", 17356, "monero", 0, 10) == [],
+              "a JSON array for /headers is empty, not an AttributeError")
+        check(await client.fetch_tip("127.0.0.1", 17356, "monero") is None, "no tip from an array")
+        check(await client.fetch_index("127.0.0.1", 17356, 0) == ([], None, None),
+              "a JSON scalar for /blobs/index is an empty page")
+        check(await client.fetch_venues("127.0.0.1", 17356) == [], "a JSON scalar for /venues")
+        check(await client.fetch_shares("127.0.0.1", 17356, bytes(32), bytes(32), 8) == [],
+              "a shares array with a non-string element")
+        reader = Reader(cfg, store, BlobDB(), AnchorStore(None), {}, client, Sha256Pow())
+        state = await asyncio.wait_for(reader.sync([("127.0.0.1", 17356)]), timeout=10)
+        check(not state.bootstrapped, "the sync ends normally, not bootstrapped")
+        check(await reader.gossip("127.0.0.1", 17356) == 0, "gossip against the same source")
+    finally:
+        await runner.cleanup()
+        await store.close()
 
 async def test_reader_hostile_headers():
     print("reader: hostile header source cannot hang the paging loop")
@@ -1844,6 +2095,9 @@ if __name__ == "__main__":
     asyncio.run(test_endpoints_and_client())
     asyncio.run(test_reader())
     asyncio.run(test_reader_resync())
+    asyncio.run(test_reader_stale_stored_view())
+    asyncio.run(test_reader_discovered_venue_bound())
+    asyncio.run(test_client_json_shapes())
     asyncio.run(test_reader_hostile_headers())
     asyncio.run(test_reader_hostile_tip_and_types())
     asyncio.run(test_reader_withheld_coinbases())

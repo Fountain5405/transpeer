@@ -19,6 +19,21 @@ def _hex32(value) -> bytes:
     return b
 
 
+def _obj(data) -> dict:
+    """A JSON body that must be an object, or ValueError. A body that is
+    an array or a scalar is malformed, like any other wrong type."""
+    if not isinstance(data, dict):
+        raise ValueError("body is not a JSON object")
+    return data
+
+
+def _items(value, kind) -> list:
+    """A JSON array whose elements are all `kind`, or ValueError."""
+    if not isinstance(value, list) or not all(isinstance(v, kind) for v in value):
+        raise ValueError("not an array of the expected type")
+    return value
+
+
 class AnchorClient:
     """Every method returns well-typed values or the empty result: JSON
     from the network is untrusted, so a wrong type, a short hash or a
@@ -37,12 +52,12 @@ class AnchorClient:
                 async with session.get(url) as resp:
                     if resp.status != 200:
                         return []
-                    data = await resp.json()
+                    data = _obj(await resp.json())
                     if data.get("chain") != chain:
                         return []
                     return [HeaderRow(int(h["height"]), bytes.fromhex(h["blob"]),
                                       int(h["difficulty"]))
-                            for h in data.get("headers", [])]
+                            for h in _items(data.get("headers", []), dict)]
         except (aiohttp.ClientError, asyncio.TimeoutError, ValueError, TypeError, KeyError):
             return []
 
@@ -53,7 +68,7 @@ class AnchorClient:
                 async with session.get(url) as resp:
                     if resp.status != 200:
                         return None
-                    data = await resp.json()
+                    data = _obj(await resp.json())
                     if data.get("chain") != chain:
                         return None
                     tip = data.get("tip")
@@ -70,8 +85,8 @@ class AnchorClient:
                 async with session.get(url) as resp:
                     if resp.status != 200:
                         return []
-                    data = await resp.json()
-                    return [_hex32(v) for v in data.get("venues", [])]
+                    data = _obj(await resp.json())
+                    return [_hex32(v) for v in _items(data.get("venues", []), str)]
         except (aiohttp.ClientError, asyncio.TimeoutError, ValueError, TypeError):
             return []
 
@@ -105,8 +120,8 @@ class AnchorClient:
                 async with session.get(url) as resp:
                     if resp.status != 200:
                         return []
-                    data = await resp.json()
-                    return [bytes.fromhex(s) for s in data.get("shares", [])]
+                    data = _obj(await resp.json())
+                    return [bytes.fromhex(s) for s in _items(data.get("shares", []), str)]
         except (aiohttp.ClientError, asyncio.TimeoutError, ValueError, TypeError):
             return []
 
@@ -145,8 +160,8 @@ class AnchorClient:
                 async with session.get(url) as resp:
                     if resp.status != 200:
                         return [], None, None
-                    data = await resp.json()
-                    rows = [r for r in data.get("blobs", []) if isinstance(r, dict)]
+                    data = _obj(await resp.json())
+                    rows = _items(data.get("blobs", []), dict)
                     next_since = data.get("next_since")
                     next_since = None if next_since is None else int(next_since)
                     next_after_hex = data.get("next_after")

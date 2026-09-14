@@ -12,8 +12,8 @@ from ..peerstore import PeerStore, TranspeerEntry
 from .blob import BlobError, decode_blob
 from .blobdb import BlobDB, Commitment
 from .fetch import AnchorClient
-from .headers import (Checkpoint, HEADER_LOOKBACK, HeaderError, HeaderRow, best_view,
-                      parse_checkpoint, verify_headers)
+from .headers import (Checkpoint, HEADER_LOOKBACK, HeaderError, HeaderRow, STALE_TIP,
+                      best_view, parse_checkpoint, verify_headers)
 from .merkle import aux_slot, parse_tx_extra_mm_tag, verify_merkle_proof
 from .monero import MONERO_BLOCK_TIME, hashing_blob, parse_block_blob, seed_height
 from .powhash import PowBackend
@@ -42,6 +42,9 @@ CLIENT_TIMEOUT = 5.0
 # Venues a sync will take from what sources advertise, on top of the
 # configured ones (spec §6.4: venues are discovered from tags).
 MAX_DISCOVERED_VENUES = 16
+# A discovered venue that holds no shares and that no source has
+# advertised for this long is forgotten again.
+DISCOVERED_TTL = 86400
 # A newcomer that has fetched less of the coverage window than this is
 # never bootstrapped, whatever the coverage of what it did fetch.
 MIN_WINDOW_FETCHED = 0.9
@@ -102,6 +105,7 @@ class Reader:
         self.clock = clock
         self.rng = rng
         self.state = ReaderState()
+        self.discovered: dict = {}   # discovered venue -> last advertised (reader clock)
         self._cursors: dict = {}   # (addr, port) -> (since, after)
 
     @property
@@ -163,21 +167,40 @@ class Reader:
         return store
 
     async def _candidate_venues(self, sources: list) -> dict:
-        """Configured venues plus what the sources advertise at /venues,
-        at most MAX_DISCOVERED_VENUES new ones per sync (spec §6.4)."""
+        """Configured venues plus what the sources advertise at /venues
+        (spec §6.4). At most MAX_DISCOVERED_VENUES discovered venues are
+        kept in total; a discovered venue that holds no shares and that
+        no source has advertised for DISCOVERED_TTL is forgotten."""
         venues = venues_from_config(self.config)
-        discovered = 0
+        now = self.clock()
+        advertised = []
         for addr, port in sources:
-            if discovered >= MAX_DISCOVERED_VENUES:
-                break
             for cid in await self.client.fetch_venues(addr, port):
-                if cid in venues:
-                    continue
-                if discovered >= MAX_DISCOVERED_VENUES:
-                    break
-                venues[cid] = cid.hex()
-                discovered += 1
+                if cid not in venues and cid not in advertised:
+                    advertised.append(cid)
+        for cid in advertised:
+            if cid in self.discovered:
+                self.discovered[cid] = now
+        self._expire_discovered(now)
+        for cid in advertised:
+            if cid in self.discovered:
+                continue
+            if len(self.discovered) >= MAX_DISCOVERED_VENUES:
+                break
+            self.discovered[cid] = now
+        for cid in self.discovered:
+            venues[cid] = cid.hex()
         return venues
+
+    def _expire_discovered(self, now: float) -> None:
+        """Drop discovered venues that are both empty and unadvertised:
+        the store object goes, any directory on disk is left alone."""
+        for cid, last in list(self.discovered.items()):
+            store = self.shares.get(cid)
+            if now - last > DISCOVERED_TTL and (store is None or store.count() == 0):
+                del self.discovered[cid]
+                self.shares.pop(cid, None)
+                logger.info("READER: forgetting idle empty venue %s", cid.hex())
 
     def _seed_for(self, view, height: int):
         """The RandomX seed hash for a block or share at `height`: the id
@@ -221,11 +244,20 @@ class Reader:
                     continue
                 view = None
                 if existing is not None and existing.tip_height >= checkpoint.height:
-                    if tip <= existing.tip_height:
+                    fresh = now - existing.timestamps[-1] <= STALE_TIP
+                    if tip <= existing.tip_height and fresh:
                         views.append(existing)
                         continue
-                    rows = await self._fetch_header_range(
-                        addr, port, chain, existing.tip_height + 1, tip)
+                    if not fresh:
+                        # Spec §6.2: a stored view whose own tip has gone
+                        # stale is not a current view, so a source that
+                        # cannot extend it is offering nothing at all.
+                        logger.warning("READER: %s:%d: stale stored view; refetching",
+                                       addr, port)
+                    rows = []
+                    if tip > existing.tip_height:
+                        rows = await self._fetch_header_range(
+                            addr, port, chain, existing.tip_height + 1, tip)
                     if rows:
                         try:
                             view = verify_headers(rows, checkpoint, self.pow, now,
