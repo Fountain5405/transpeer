@@ -31,6 +31,9 @@ class Peer:
     # network (its host answered on the network's P2P port). Only
     # maintained under --native-vouchers.
     native_vouchers: set = field(default_factory=set)
+    # Subset of `vouchers` whose reporting transpeer is tagged `published`
+    # (spec §7). Only maintained under --anchor-read; never on the wire.
+    published_vouchers: set = field(default_factory=set)
     # PoW proof
     nonce: bytes = b""
     effort: int = 0
@@ -291,6 +294,12 @@ class PeerStore:
                         existing.vouchers.add(self._bucket_of(source_addr))
                         if self._source_is_native(source_addr, peer.network):
                             existing.native_vouchers.add(self._bucket_of(source_addr))
+                        if self.config.anchor_read:
+                            bucket = self._bucket_of(source_addr)
+                            if self._source_is_published(source_addr):
+                                existing.published_vouchers.add(bucket)
+                            else:
+                                existing.published_vouchers.discard(bucket)
                     existing.sources = max(1, len(existing.vouchers))
                 else:
                     existing.sources = max(existing.sources, peer.sources)
@@ -314,6 +323,9 @@ class PeerStore:
                         peer.native_vouchers = {"local"}
                     elif self._source_is_native(source_addr, peer.network):
                         peer.native_vouchers = {self._bucket_of(source_addr)}
+                    if (self.config.anchor_read and source_addr
+                            and self._source_is_published(source_addr)):
+                        peer.published_vouchers = {self._bucket_of(source_addr)}
                     peer.sources = 1
                 self._peers[peer.key] = peer
                 await self._save_peer(peer)
@@ -372,6 +384,14 @@ class PeerStore:
             for t in self._transpeers.values() if t.addr == source_addr
         )
 
+    def _source_is_published(self, source_addr: str) -> bool:
+        """Under --anchor-read, a reporting transpeer counts as published
+        when any stored transpeer entry with its address is tagged
+        `published` (spec §7), whichever port it was recorded under."""
+        return any(
+            t.published for t in self._transpeers.values() if t.addr == source_addr
+        )
+
     def set_native(self, addr: str, port: int, network: str, ok: bool):
         entry = self._transpeers.get(f"{addr}:{port}")
         if entry is not None:
@@ -382,8 +402,12 @@ class PeerStore:
 
     def _rank_key(self, p: Peer):
         if self.config.native_vouchers:
-            return (len(p.native_vouchers), len(p.vouchers), p.verified, p.last_seen)
-        return (len(p.vouchers), p.verified, p.last_seen)
+            key = (len(p.native_vouchers), len(p.vouchers), p.verified, p.last_seen)
+        else:
+            key = (len(p.vouchers), p.verified, p.last_seen)
+        if self.config.anchor_read:
+            return (len(p.published_vouchers),) + key
+        return key
 
     def get_peers(self, network: str, verified_only: bool = True,
                   top: int | None = None) -> list[Peer]:
@@ -438,7 +462,17 @@ class PeerStore:
         all_buckets = {b for p in ranked for b in p.vouchers if b != "local"}
         unrep = sorted(b for b in all_buckets if b not in represented)
         n_unrep = len(unrep)
-        random.shuffle(unrep)
+        if self.config.anchor_read:
+            published_buckets = {
+                self._bucket_of(t.addr) for t in self._transpeers.values() if t.published
+            }
+            pub = [b for b in unrep if b in published_buckets]
+            rest = [b for b in unrep if b not in published_buckets]
+            random.shuffle(pub)
+            random.shuffle(rest)
+            unrep = pub + rest
+        else:
+            random.shuffle(unrep)
         chosen = {p.key for p in head}
         picks: list[Peer] = []
         for b in unrep:
@@ -627,6 +661,13 @@ class PeerStore:
         pool = {k: t for k, t in self._transpeers.items() if not self.is_tried(t)}
         if not pool:
             pool = dict(self._transpeers)
+        if self.config.anchor_read:
+            unfaithful = [t for t in pool.values() if t.unfaithful]
+            if unfaithful:
+                elsewhere = [t for t in unfaithful
+                             if self._bucket_of(t.addr) != incoming_bucket]
+                pick_from = elsewhere or unfaithful
+                return min(pick_from, key=lambda t: t.last_seen).key
         if not self.config.bucketed:
             return min(pool.keys(), key=lambda k: pool[k].last_seen)
         buckets: dict[str, list[TranspeerEntry]] = {}
@@ -656,26 +697,29 @@ class PeerStore:
         entries.
         """
         if not self.config.bucketed:
-            return sorted(
-                self._transpeers.values(),
-                key=lambda t: t.last_queried,
-            )[:limit]
+            ordered = sorted(self._transpeers.values(), key=lambda t: t.last_queried)
+            if self.config.anchor_read:
+                ordered = sorted(ordered, key=lambda t: t.unfaithful)
+            return ordered[:limit]
         queues = [
             sorted(members, key=lambda t: t.last_queried)
             for members in self._transpeers_by_bucket().values()
         ]
         random.shuffle(queues)
         picked: list[TranspeerEntry] = []
-        while queues and len(picked) < limit:
+        remaining_budget = None if self.config.anchor_read else limit
+        while queues and (remaining_budget is None or len(picked) < remaining_budget):
             remaining = []
             for q in queues:
-                if len(picked) >= limit:
+                if remaining_budget is not None and len(picked) >= remaining_budget:
                     break
                 picked.append(q.pop(0))
                 if q:
                     remaining.append(q)
             queues = remaining
-        return picked
+        if self.config.anchor_read:
+            picked = sorted(picked, key=lambda t: t.unfaithful)
+        return picked[:limit]
 
     def mark_queried(self, addr: str, port: int, answered: bool = False):
         """Record that we just queried a transpeer, and whether it answered."""
@@ -713,6 +757,8 @@ class PeerStore:
             if t.addr != exclude_addr
         ]
         if len(candidates) <= limit:
+            if self.config.anchor_read:
+                candidates = sorted(candidates, key=lambda t: t.unfaithful)
             return candidates
         now = int(time.time())
 
@@ -721,7 +767,10 @@ class PeerStore:
 
         if not self.config.bucketed:
             weights = [recency(t) for t in candidates]
-            return random.choices(candidates, weights=weights, k=limit)
+            picked = random.choices(candidates, weights=weights, k=limit)
+            if self.config.anchor_read:
+                picked = sorted(picked, key=lambda t: t.unfaithful)
+            return picked
 
         buckets: dict[str, list[TranspeerEntry]] = {}
         for t in candidates:
@@ -738,6 +787,8 @@ class PeerStore:
             if t.key not in seen:
                 seen.add(t.key)
                 picked.append(t)
+        if self.config.anchor_read:
+            picked = sorted(picked, key=lambda t: t.unfaithful)
         return picked
 
     def snapshot(self, networks: list[str] | None = None, top: int = 20) -> dict:

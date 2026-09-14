@@ -812,6 +812,64 @@ async def test_reader_hostile_fork():
         await store.close()
 
 
+async def test_store_tags_ranking():
+    print("store tags: published vouchers rank first, unfaithful ranked/evicted last")
+    from transpeer.config import Config
+    from transpeer.peerstore import Peer, PeerStore, TranspeerEntry
+
+    now = int(time.time())
+    cfg = Config(in_memory=True, vouchers=True, anchor_read=True,
+                 anchor_checkpoint="0:" + "00" * 32, no_verify=True)
+    store = PeerStore(cfg)
+    await store.init()
+    try:
+        tp1 = "20.1.0.1"  # will be published
+        tp2 = "21.1.0.1"  # not published
+        await store.add_transpeer(TranspeerEntry(addr=tp1, port=7337, last_seen=now))
+        await store.add_transpeer(TranspeerEntry(addr=tp2, port=7337, last_seen=now))
+        await store.set_published(tp1, 7337, True)
+
+        peer1 = Peer(network="monero", addr="20.2.0.1", port=18080, last_seen=now, verified=True)
+        peer2 = Peer(network="monero", addr="21.2.0.1", port=18080, last_seen=now, verified=True)
+        await store.add_peer(peer1, source_addr=tp1)
+        await store.add_peer(peer2, source_addr=tp2)
+
+        peers = store.get_peers("monero", verified_only=False)
+        check(peers[0].addr == peer1.addr,
+              "published reporter's peer ranks first despite equal voucher counts")
+
+        # Flip which transpeer is published: re-report (the next real report
+        # would refresh published_vouchers the same way) and the order flips.
+        await store.set_published(tp1, 7337, False)
+        await store.set_published(tp2, 7337, True)
+        await store.add_peer(peer1, source_addr=tp1)
+        await store.add_peer(peer2, source_addr=tp2)
+        peers = store.get_peers("monero", verified_only=False)
+        check(peers[0].addr == peer2.addr, "flipping published flips the ranking order")
+
+        # Unfaithful: three transpeers in distinct buckets, mark one unfaithful.
+        # Fresh store so tp1/tp2's untouched last_queried can't crowd this out.
+        store2 = PeerStore(cfg)
+        await store2.init()
+        tp_a, tp_b, tp_c = "20.3.0.1", "21.3.0.1", "20.4.0.1"
+        for addr in (tp_a, tp_b, tp_c):
+            await store2.add_transpeer(TranspeerEntry(addr=addr, port=7337, last_seen=now))
+        await store2.set_unfaithful(tp_b, 7337, True)
+
+        for addr in (tp_a, tp_b, tp_c):
+            store2.mark_queried(addr, 7337, answered=False)
+        q = store2.get_transpeers_for_query(3)
+        check(len(q) == 3 and q[-1].addr == tp_b, "unfaithful entry ranked last in the query batch")
+
+        victim_key = store2._pick_eviction(incoming_bucket="99.0.0.0/16")
+        victim = store2._transpeers.get(victim_key)
+        check(victim is not None and victim.unfaithful,
+              "_pick_eviction prefers the unfaithful transpeer's bucket")
+        await store2.close()
+    finally:
+        await store.close()
+
+
 if __name__ == "__main__":
     test_index_cursor()
     test_monero_hashing()
@@ -823,5 +881,6 @@ if __name__ == "__main__":
     asyncio.run(test_reader())
     asyncio.run(test_reader_hostile_headers())
     asyncio.run(test_reader_hostile_fork())
+    asyncio.run(test_store_tags_ranking())
     print(f"\n{passed} passed, {failed} failed")
     sys.exit(1 if failed else 0)
