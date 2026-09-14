@@ -88,8 +88,26 @@ def test_monero_hashing():
           "short window (no cut) still works")
 
 
+def test_pow_backends():
+    print("pow backends")
+    from transpeer.anchor.powhash import Sha256Pow, mine, randomx_backend, PowUnavailable, backend_for
+    from transpeer.anchor.monero import check_hash
+    from transpeer.config import Config
+    pow = Sha256Pow()
+    nonce, blob = mine(lambda n: b"hdr" + n.to_bytes(4, "little"), 2000, pow)
+    check(check_hash(pow.hash(blob, 0, bytes(32)), 2000), "mine finds a nonce meeting difficulty 2000")
+    check(blob[3:7] == nonce.to_bytes(4, "little"), "mine returns the blob for its nonce")
+    try:
+        randomx_backend()
+        check(True, "randomx binding present")
+    except PowUnavailable as e:
+        check("anchor-sim-pow" in str(e), "randomx_backend names the sim flag when unavailable")
+    check(backend_for(Config(anchor_sim_pow=True)).name == "sha256", "backend_for picks sha256 under the sim flag")
+
+
 if __name__ == "__main__":
     test_index_cursor()
     test_monero_hashing()
+    test_pow_backends()
     print(f"\n{passed} passed, {failed} failed")
     sys.exit(1 if failed else 0)

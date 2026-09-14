@@ -123,6 +123,7 @@ class Config:
     aux_diff: int = 100000
     anchor_min_age: float = 14.0   # days a transpeer must have been known (spec 4.1 rule 1)
     anchor_max_new: float = 0.25   # share of entries allowed without a committed history (rule 5)
+    anchor_sim_pow: bool = False
 
     def __post_init__(self):
         if not self.in_memory:
@@ -236,6 +237,11 @@ def parse_args() -> Config:
     parser.add_argument("--anchor-max-new", type=float, default=0.25,
                         help="Largest share of published entries without a committed history.")
     parser.add_argument(
+        "--anchor-sim-pow", action="store_true",
+        help="Simulation only: SHA-256 in place of RandomX for anchor-chain "
+        "and share proof-of-work.",
+    )
+    parser.add_argument(
         "--scan-idle-rate", type=float, default=0.0,
         help="Probes per second once --scan-target-known transpeers have "
         "answered (default 0: stop scanning).",
@@ -297,6 +303,7 @@ def parse_args() -> Config:
         aux_diff=args.aux_diff,
         anchor_min_age=args.anchor_min_age,
         anchor_max_new=args.anchor_max_new,
+        anchor_sim_pow=args.anchor_sim_pow,
         snapshot_interval=args.snapshot_interval,
     )
 
