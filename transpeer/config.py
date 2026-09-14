@@ -351,6 +351,43 @@ def parse_args() -> Config:
     )
 
 
+def parse_observe(spec: str) -> list[tuple[bytes, str, int]]:
+    """Parse --anchor-observe: comma-separated 'host:port' (venue from the
+    port through VENUE_PORTS) or 'name@host:port'/'hex@host:port' (venue
+    named explicitly). Returns [(consensus_id, host, port), ...]."""
+    from .anchor.share import VENUES, VENUE_PORTS
+
+    out: list[tuple[bytes, str, int]] = []
+    spec = (spec or "").strip()
+    if not spec:
+        return out
+    port_to_venue = {port: VENUES[name] for name, port in VENUE_PORTS.items()}
+    for entry in spec.split(","):
+        entry = entry.strip()
+        if not entry:
+            continue
+        if "@" in entry:
+            venue_spec, hostport = entry.split("@", 1)
+        else:
+            venue_spec, hostport = None, entry
+        host, _, port_s = hostport.rpartition(":")
+        if not host:
+            raise ValueError(f"invalid --anchor-observe entry: {entry}")
+        port = int(port_s)
+        if venue_spec is None:
+            consensus_id = port_to_venue.get(port)
+            if consensus_id is None:
+                raise ValueError(f"--anchor-observe: unknown port {port}, name the venue explicitly")
+        elif venue_spec in VENUES:
+            consensus_id = VENUES[venue_spec]
+        elif len(venue_spec) == 64:
+            consensus_id = bytes.fromhex(venue_spec)
+        else:
+            raise ValueError(f"--anchor-observe: unknown venue {venue_spec}")
+        out.append((consensus_id, host, port))
+    return out
+
+
 def _parse_static_peers(spec: str | None) -> dict[str, list[tuple[str, int]]] | None:
     """Parse static peer spec: 'network:addr:port,addr:port;network:addr:port,...'"""
     if not spec:

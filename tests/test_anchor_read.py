@@ -1041,6 +1041,64 @@ async def test_challenges():
         await store.close()
 
 
+async def test_p2p_observer():
+    from transpeer.anchor.powhash import Sha256Pow
+    from transpeer.anchor.share import VENUES, mine_share, parse_share
+    from transpeer.anchor.p2p import P2PoolClient
+    from sim.p2pool_double import P2PoolDouble
+
+    print("p2p observer client and double")
+    pow = Sha256Pow()
+    venue = VENUES["mini"]
+    kw = dict(consensus_id=venue, txin_gen_height=3000000, prev_id=bytes(32),
+              timestamp=1_700_000_000, parent=bytes(32), height=0, difficulty=1,
+              cumulative_difficulty=1, aux={})
+    parent_raw = mine_share(kw, pow)
+    parent = parse_share(parent_raw, venue)
+    child_raw = mine_share(dict(kw, parent=parent.id, height=1, cumulative_difficulty=2), pow)
+    child = parse_share(child_raw, venue)
+
+    shares = {parent.id: parent_raw, child.id: child_raw}
+    configured_peers = [("203.0.113.5", 37889), ("198.51.100.9", 37889)]
+    double = P2PoolDouble(venue, shares, child.id, configured_peers)
+    await double.start(17357)
+    try:
+        client = P2PoolClient("127.0.0.1", 17357, venue)
+        await client.connect()
+        try:
+            tip_raw = await client.request_block(bytes(32))
+            check(tip_raw == child_raw, "request_block(zero) returns the tip's raw bytes")
+
+            unknown = await client.request_block(hashlib.sha256(b"nope").digest())
+            check(unknown is None, "request_block(unknown) returns None")
+
+            peers = await client.request_peers()
+            check(set(peers) == set(configured_peers),
+                  "request_peers returns the configured peers without the pseudo-peer")
+
+            received = []
+            client.on_share = lambda raw: received.append(raw)
+            await double.broadcast(parent_raw)
+            for _ in range(50):
+                if received:
+                    break
+                await asyncio.sleep(0.05)
+            check(received == [parent_raw], "a broadcast from the double reaches on_share")
+        finally:
+            await client.close()
+
+        wrong_client = P2PoolClient("127.0.0.1", 17357, VENUES["main"])
+        try:
+            await wrong_client.connect()
+            check(False, "wrong-consensus client should not complete the handshake")
+        except ConnectionError:
+            check(True, "double rejects a client with a different consensus id")
+        finally:
+            await wrong_client.close()
+    finally:
+        await double.stop()
+
+
 if __name__ == "__main__":
     test_index_cursor()
     test_monero_hashing()
@@ -1056,5 +1114,6 @@ if __name__ == "__main__":
     asyncio.run(test_query_batch_bucketed_anchor_read())
     asyncio.run(test_node_wiring_read())
     asyncio.run(test_challenges())
+    asyncio.run(test_p2p_observer())
     print(f"\n{passed} passed, {failed} failed")
     sys.exit(1 if failed else 0)

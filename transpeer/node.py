@@ -11,7 +11,7 @@ from aiohttp import web
 from .client import TranspeerClient
 from .config import (
     Config, EXTRACT_INTERVAL, QUERY_INTERVAL, SCAN_INTERVAL, QUERY_BATCH_SIZE,
-    TIMESTAMP_BUCKET_SECS,
+    TIMESTAMP_BUCKET_SECS, parse_observe,
 )
 from .networks import get_network
 from .peerstore import Peer, PeerStore
@@ -47,6 +47,11 @@ class Node:
         self.reader = None
         self.anchor_client = None
         self.challenger = None
+        # P2Pool observer (--anchor-observe); built in run().
+        self._observe_entries: list = []
+        self._observe_stores: dict = {}
+        self._observe_pow = None
+        self._observe_clients: dict = {}
         for spec in config.networks:
             try:
                 net = get_network(spec)
@@ -120,6 +125,7 @@ class Node:
             except PowUnavailable as e:
                 log.error("%s", e)
                 raise SystemExit(2) from e
+            self._observe_pow = pow_backend
             self.reader = Reader(
                 self.config, self.store, self.blobdb, self._anchor_store,
                 self._share_stores, self.anchor_client, pow_backend,
@@ -128,6 +134,29 @@ class Node:
             self.client.after_query = self.reader.gossip_entry
             from .anchor.challenge import Challenger
             self.challenger = Challenger(self.store, self.reader, self.anchor_client)
+
+        if self.config.anchor_observe:
+            from .anchor.powhash import PowUnavailable as _PowUnavailable, backend_for as _backend_for
+            from .anchor.stores import ShareStore as _ShareStore, venue_dir as _venue_dir
+            self._observe_entries = parse_observe(self.config.anchor_observe)
+            if self._observe_pow is None:
+                try:
+                    self._observe_pow = _backend_for(self.config)
+                except _PowUnavailable as e:
+                    log.error("%s", e)
+                    raise SystemExit(2) from e
+            for consensus_id, _host, _port in self._observe_entries:
+                if consensus_id in self._observe_stores:
+                    continue
+                if self.config.anchor_read and consensus_id in self._share_stores:
+                    self._observe_stores[consensus_id] = self._share_stores[consensus_id]
+                    continue
+                store = _ShareStore(
+                    consensus_id,
+                    None if self.config.in_memory else _venue_dir(self.config.data_dir, consensus_id),
+                )
+                store.load()
+                self._observe_stores[consensus_id] = store
 
         self.server = TranspeerServer(
             self.config, self.store, self.node_id, self.start_time,
@@ -172,6 +201,7 @@ class Node:
                 self._anchor_loop(),
                 self._reader_loop(),
                 *([self._challenge_loop()] if self.reader is not None else []),
+                *([self._observe_loop()] if self._observe_entries else []),
             )
         finally:
             await self.store.close()
@@ -407,3 +437,70 @@ class Node:
                 await self.challenger.round()
             except Exception:  # noqa: BLE001
                 log.exception("challenge loop")
+
+    def _observe_on_share(self, consensus_id: bytes, store):
+        """Verify-and-add path shared by broadcasts and requested blocks."""
+        from .anchor.share import parse_share, verify_share_pow
+
+        def _on_share(raw: bytes):
+            try:
+                share = parse_share(raw, consensus_id)
+            except ValueError:
+                return
+            if verify_share_pow(share, self._observe_pow):
+                store.add(share)
+        return _on_share
+
+    async def _observe_loop(self):
+        """One P2PoolClient per --anchor-observe entry (spec §17): request
+        the venue tip every 60 s, walk parents until known (at most 64 per
+        cycle), verify with parse_share + verify_share_pow, store. Drop a
+        client on any connection failure and reconnect next cycle."""
+        from .anchor.p2p import P2PoolClient
+        from .anchor.share import parse_share, verify_share_pow
+
+        while True:
+            for consensus_id, host, port in self._observe_entries:
+                key = (consensus_id, host, port)
+                store = self._observe_stores[consensus_id]
+                client = self._observe_clients.get(key)
+                try:
+                    if client is None:
+                        client = P2PoolClient(
+                            host, port, consensus_id,
+                            on_share=self._observe_on_share(consensus_id, store),
+                        )
+                        await client.connect()
+                        self._observe_clients[key] = client
+
+                    raw = await client.request_block(bytes(32))
+                    if not raw:
+                        continue
+                    try:
+                        share = parse_share(raw, consensus_id)
+                    except ValueError:
+                        continue
+                    if verify_share_pow(share, self._observe_pow):
+                        store.add(share)
+
+                    parent = share.parent
+                    walked = 0
+                    while walked < 64 and parent != bytes(32) and store.get(parent) is None:
+                        praw = await client.request_block(parent)
+                        if not praw:
+                            break
+                        try:
+                            pshare = parse_share(praw, consensus_id)
+                        except ValueError:
+                            break
+                        if not verify_share_pow(pshare, self._observe_pow):
+                            break
+                        store.add(pshare)
+                        parent = pshare.parent
+                        walked += 1
+                except (ConnectionError, OSError, asyncio.TimeoutError) as e:
+                    log.warning("observer %s:%d dropped: %s", host, port, e)
+                    self._observe_clients.pop(key, None)
+                    if client is not None:
+                        await client.close()
+            await asyncio.sleep(60)
