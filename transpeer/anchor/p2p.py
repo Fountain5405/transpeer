@@ -420,7 +420,16 @@ class P2PoolClient:
         self._block_pending.append(fut)
         self._writer.write(encode_block_request(share_id))
         await self._writer.drain()
-        return await asyncio.wait_for(fut, self.timeout)
+        try:
+            return await asyncio.wait_for(fut, self.timeout)
+        except asyncio.TimeoutError:
+            # Responses are paired with requests by order, so a future
+            # left pending would hand this request's answer to the next
+            # one. Drop it (it is the oldest) and drop the connection.
+            if fut in self._block_pending:
+                self._block_pending.remove(fut)
+            await self.close()
+            raise
 
     async def request_peers(self):
         loop = asyncio.get_running_loop()

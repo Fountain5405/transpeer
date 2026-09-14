@@ -664,7 +664,7 @@ async def test_reader():
         window_days = (40 - 30) * 120 / 86400
         rcfg = Config(in_memory=True, no_verify=True, anchor_chain="monero",
                       anchor_checkpoint=f"5:{checkpoint.hash.hex()}",
-                      anchor_window_days=window_days, port=17390, bind="127.0.0.1")
+                      anchor_window_days=window_days, port=17362, bind="127.0.0.1")
         r_store = PeerStore(rcfg)
         await r_store.init()
         r_db = BlobDB()
@@ -847,7 +847,7 @@ async def test_reader_hostile_headers():
     await site.start()
 
     cfg = Config(in_memory=True, no_verify=True, anchor_chain="monero",
-                anchor_checkpoint=f"5:{'00' * 32}", port=17391, bind="127.0.0.1")
+                anchor_checkpoint=f"5:{'00' * 32}", port=17362, bind="127.0.0.1")
     store = PeerStore(cfg)
     await store.init()
     try:
@@ -1270,7 +1270,7 @@ async def test_reader_hostile_fork():
     cfg = Config(in_memory=True, no_verify=True, anchor_chain="monero",
                 anchor_checkpoint=f"2:{checkpoint.hash.hex()}",
                 anchor_venues="mini", anchor_window_days=1.0,
-                port=17392, bind="127.0.0.1")
+                port=17362, bind="127.0.0.1")
     store = PeerStore(cfg)
     await store.init()
     now = start_ts + 120 * 2 + 60
@@ -1290,6 +1290,138 @@ async def test_reader_hostile_fork():
     finally:
         await runner.cleanup()
         await store.close()
+
+
+async def test_reader_cached_block_recheck():
+    print("reader: a cached block blob is re-checked against the view before use")
+    from aiohttp import web
+    from transpeer.config import Config
+    from transpeer.peerstore import PeerStore
+    from transpeer.server import TranspeerServer
+    from transpeer.anchor import CHAIN_ID
+    from transpeer.anchor.blob import blob_hash as _blob_hash, encode_blob
+    from transpeer.anchor.blobdb import BlobDB, Commitment
+    from transpeer.anchor.fetch import AnchorClient
+    from transpeer.anchor.merkle import aux_slot, build_mm_tag, merkle_proof, merkle_tree
+    from transpeer.anchor.monero import block_id
+    from transpeer.anchor.powhash import Sha256Pow
+    from transpeer.anchor.reader import Reader
+    from transpeer.anchor.share import VENUES, mine_share, parse_share
+    from transpeer.anchor.stores import AnchorStore
+
+    pow = Sha256Pow()
+    venue = VENUES["mini"]
+    blob = encode_blob("monero", 1, [("20.8.0.1", 7337)])
+    h_blob = _blob_hash(blob)
+    start_ts = 1_700_000_000
+    now = start_ts + 120 * 7 + 60
+
+    kw = dict(consensus_id=venue, txin_gen_height=1, prev_id=bytes(32), timestamp=start_ts,
+              parent=bytes(32), height=0, difficulty=300, cumulative_difficulty=300,
+              aux={CHAIN_ID: (h_blob, 100000)})
+    share = parse_share(mine_share(kw, pow), venue)
+
+    # The block commitment's proof: the blob hash at its aux slot in the
+    # share's own Merkle tree, which the tag's root commits to.
+    leaves = [b""] * share.n_aux_chains
+    leaves[aux_slot(venue, share.aux_nonce, share.n_aux_chains)] = share.id
+    leaves[aux_slot(CHAIN_ID, share.aux_nonce, share.n_aux_chains)] = h_blob
+    proof, path = merkle_proof(merkle_tree(leaves), h_blob)
+
+    rows, blocks = [], {}
+    prev = bytes(32)
+    for height in range(8):
+        extra = b"\x01" + bytes(32)
+        if height == 7:
+            extra += build_mm_tag(share.n_aux_chains, share.aux_nonce, share.merkle_root)
+        row, block = mine_block(pow, height, start_ts + 120 * height, prev, tx_extra=extra)
+        rows.append(row)
+        blocks[height] = block
+        prev = block_id(row.blob)
+
+    srv_anchor = AnchorStore(None)
+    srv_anchor.put_headers(rows)
+    for h, b in blocks.items():
+        srv_anchor.put_block(h, b)
+    srv_db = BlobDB()
+    # Only the block commitment: the share is not served, so the reader
+    # can only learn this blob through gossip.
+    srv_db.add(blob, Commitment(h_blob, "block", "", f"7:{block_id(rows[7].blob).hex()}",
+                                "pub", 50, start_ts, tuple(proof), path), now - 10)
+
+    cfg = Config(in_memory=True, no_verify=True, anchor_chain="monero",
+                 port=17368, bind="127.0.0.1")
+    srv_store = PeerStore(cfg)
+    await srv_store.init()
+    srv = TranspeerServer(cfg, srv_store, "recheck_srv", time.time(), network_names=["monero"],
+                          blobdb=srv_db, anchor_store=srv_anchor, share_stores={})
+    runner = web.AppRunner(srv.create_app())
+    await runner.setup()
+    await web.TCPSite(runner, "127.0.0.1", 17368).start()
+
+    r_store = None
+    try:
+        rcfg = Config(in_memory=True, no_verify=True, anchor_chain="monero",
+                      anchor_checkpoint=f"5:{block_id(rows[5].blob).hex()}", anchor_venues="mini",
+                      anchor_window_days=1.0, port=17362, bind="127.0.0.1")
+        r_store = PeerStore(rcfg)
+        await r_store.init()
+        r_db = BlobDB()
+        reader = Reader(rcfg, r_store, r_db, AnchorStore(None), {}, AnchorClient(rcfg),
+                        pow, clock=lambda: now)
+        await asyncio.wait_for(reader.sync([("127.0.0.1", 17368)]), timeout=30)
+        check(reader.anchor.block(7) == blocks[7], "sync cached the real block 7")
+
+        # Poison the cache with a valid block from another height.
+        reader.anchor.put_block(7, blocks[6])
+        stored = await asyncio.wait_for(reader.gossip("127.0.0.1", 17368), timeout=30)
+        check(stored == 1 and r_db.get(h_blob) == blob,
+              "the poisoned cache is refetched, so the block commitment still verifies")
+        check(reader.anchor.block(7) == blocks[7], "the cache holds the real block again")
+    finally:
+        await runner.cleanup()
+        await srv_store.close()
+        if r_store is not None:
+            await r_store.close()
+
+
+async def test_p2p_request_block_timeout():
+    print("p2p: a timed-out block request leaves no pending future")
+    from transpeer.anchor.p2p import P2PoolClient
+    from transpeer.anchor.share import VENUES
+
+    class _DeadWriter:
+        def __init__(self):
+            self.closed = False
+
+        def write(self, data):
+            pass
+
+        async def drain(self):
+            pass
+
+        def close(self):
+            self.closed = True
+
+    client = P2PoolClient("127.0.0.1", 17350, VENUES["mini"], timeout=0.05)
+    writer = _DeadWriter()
+    client._writer = writer
+    try:
+        await client.request_block(bytes(32))
+        check(False, "a block request with no answer times out")
+    except asyncio.TimeoutError:
+        check(True, "a block request with no answer times out")
+    check(client._block_pending == [], "the timed-out future is dropped, so replies cannot drift")
+    check(writer.closed, "the connection is closed after a timed-out request")
+
+
+def test_transpeer_entry_wire():
+    print("wire: local tags stay local")
+    from transpeer.peerstore import TranspeerEntry
+    d = TranspeerEntry("20.0.0.9", 7337, published=True, unfaithful=True).to_dict()
+    check("published" not in d and "unfaithful" not in d,
+          "published and unfaithful are not sent on the wire")
+    check(d["addr"] == "20.0.0.9" and d["port"] == 7337, "the wire fields are unchanged")
 
 
 async def test_store_tags_ranking():
@@ -1522,6 +1654,9 @@ async def test_challenges():
 
 
 async def test_p2p_observer():
+    # The handshake proof-of-work is a random search that can take tens of
+    # seconds in pure Python on a loaded box; the clients here get a long
+    # timeout so the check is of the protocol, not of the search's luck.
     from transpeer.anchor.powhash import Sha256Pow
     from transpeer.anchor.share import VENUES, mine_share, parse_share
     from transpeer.anchor.p2p import P2PoolClient
@@ -1543,7 +1678,7 @@ async def test_p2p_observer():
     double = P2PoolDouble(venue, shares, child.id, configured_peers)
     await double.start(17357)
     try:
-        client = P2PoolClient("127.0.0.1", 17357, venue)
+        client = P2PoolClient("127.0.0.1", 17357, venue, timeout=120)
         await client.connect()
         try:
             tip_raw = await client.request_block(bytes(32))
@@ -1567,7 +1702,7 @@ async def test_p2p_observer():
         finally:
             await client.close()
 
-        wrong_client = P2PoolClient("127.0.0.1", 17357, VENUES["main"])
+        wrong_client = P2PoolClient("127.0.0.1", 17357, VENUES["main"], timeout=120)
         try:
             await wrong_client.connect()
             check(False, "wrong-consensus client should not complete the handshake")
@@ -1593,7 +1728,7 @@ async def test_p2p_peer_list_edge_cases():
     double = P2PoolDouble(venue, {}, bytes(32), sixteen_peers)
     await double.start(17360)
     try:
-        client = P2PoolClient("127.0.0.1", 17360, venue)
+        client = P2PoolClient("127.0.0.1", 17360, venue, timeout=120)
         await client.connect()
         try:
             first = await client.request_peers()
@@ -1615,7 +1750,7 @@ async def test_p2p_peer_list_edge_cases():
     double2 = P2PoolDouble(venue, {}, bytes(32), filtered_peers)
     await double2.start(17361)
     try:
-        client2 = P2PoolClient("127.0.0.1", 17361, venue)
+        client2 = P2PoolClient("127.0.0.1", 17361, venue, timeout=120)
         await client2.connect()
         try:
             peers = await client2.request_peers()
@@ -1715,6 +1850,9 @@ if __name__ == "__main__":
     asyncio.run(test_reader_discovered_venue())
     asyncio.run(test_reader_fetch_budget())
     asyncio.run(test_reader_hostile_fork())
+    asyncio.run(test_reader_cached_block_recheck())
+    asyncio.run(test_p2p_request_block_timeout())
+    test_transpeer_entry_wire()
     asyncio.run(test_store_tags_ranking())
     asyncio.run(test_query_batch_bucketed_anchor_read())
     asyncio.run(test_node_wiring_read())

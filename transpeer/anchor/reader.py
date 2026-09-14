@@ -587,29 +587,36 @@ class Reader:
             return False
         return transpeer_aux(share) == commitment.hash
 
+    @staticmethod
+    def _matches(blob: bytes, expected: bytes) -> bool:
+        try:
+            return hashing_blob(blob) == expected
+        except (ValueError, TypeError, KeyError):
+            return False
+
     async def _verify_block_commitment(self, addr: str, port: int, commitment: Commitment) -> bool:
         try:
             height_s, _hex_id = commitment.ref.split(":", 1)
             height = int(height_s)
         except ValueError:
             return False
+        view = self.anchor.view
+        if view is None or not (view.first <= height <= view.tip_height):
+            return False
+        expected = view.blobs[height - view.first]
         blob = self.anchor.block(height)
+        if blob is not None and not self._matches(blob, expected):
+            # The cache predates the current view (a reorg, or a blob
+            # stored under another chain): do not read a tag out of it.
+            blob = None
         if blob is None:
             blob = await self.client.fetch_block(addr, port, self.config.anchor_chain, height)
-            if blob is None:
-                return False
-            view = self.anchor.view
-            if view is None or not (view.first <= height <= view.tip_height):
-                return False
-            try:
-                if hashing_blob(blob) != view.blobs[height - view.first]:
-                    return False
-            except ValueError:
+            if blob is None or not self._matches(blob, expected):
                 return False
             self.anchor.put_block(height, blob)
         try:
             tag = parse_tx_extra_mm_tag(parse_block_blob(blob).tx_extra)
-        except ValueError:
+        except (ValueError, TypeError, KeyError):
             return False
         if tag is None:
             return False

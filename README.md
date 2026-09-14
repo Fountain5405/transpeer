@@ -104,18 +104,26 @@ count.
 | `--anchor-observe HOST:PORT,...` | empty | P2Pool nodes to fill share stores from through the observer client (also accepts `name@host:port`). Requires `--anchor-read`. |
 
 The checkpoint is `HEIGHT:HASH`: a block height and its hex block
-hash on the Monero chain. `--anchor-sim-pow` is simulation-only; without
+hash on the Monero chain. A source whose tip is below the checkpoint,
+or more than 400000 blocks past it (about a year and a half of blocks),
+is ignored, so ship a fresh checkpoint with each release: one older than
+that bound stops the reader from following any chain.
+`--anchor-sim-pow` is simulation-only; without
 it the reader requires a RandomX binding at start-up and refuses to run
 otherwise. `--anchor-monerod` and `--anchor-observe` are built to
 monerod's documented RPC and to P2Pool v4.18's source, but are
 unverified against real daemons.
+
+The node also answers `GET /venues` with the consensus ids of the
+venues it holds shares for, so a reader can resolve a merge-mining tag
+for a venue it was not configured with, and serve that venue onward.
 
 Under `--anchor-read` the node writes `anchor_chain.json` (the verified
 header chain) and `anchor_blobs.json` (transpeer-list blobs, shared with
 the publisher) directly under `data_dir`, and per-venue raw shares
 under `data_dir/venues/<hex>/`.
 
-**Tests.** `python tests/test_anchor_read.py` (138 passed),
+**Tests.** `python tests/test_anchor_read.py` (171 passed),
 `python tests/test_anchor.py` (106 passed),
 `python tests/test_anchor_publish.py` (118 passed),
 `python tests/test_bucketed.py` (47 passed),

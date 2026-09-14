@@ -113,8 +113,6 @@ class TranspeerEntry:
             "networks": self.networks,
             "last_seen": self.last_seen,
             "first_seen": self.first_seen,
-            "published": self.published,
-            "unfaithful": self.unfaithful,
         }
 
 

@@ -792,20 +792,31 @@ venue endpoints stay free of handshake proof-of-work and under the
 rate limit.
 
 **Checkpoint and difficulty.** A checkpoint is `height:hash`. Headers
-are fetched from `checkpoint - 735` (Monero's difficulty window plus
-lag) so that every block after the checkpoint has a full window.
-Blocks at or before the checkpoint are authenticated by linkage to the
-checkpoint hash and their difficulties are taken as served; blocks
-after it get their difficulty recomputed by Monero's `next_difficulty`
-(window 720, lag 15, cut 60, target 120 s) and checked against the
-served value. A server lying about pre-checkpoint difficulties can only
-lower the post-checkpoint difficulty it then has to mine at, and its
-chain loses the cumulative-work comparison to any honest source; the
-newcomer is only fooled when every source it reaches lies, which is
-the eclipse the anchor cannot address. Ship a fresh checkpoint with
-each release. The 30-minute stale-tip rule and the sampling rule of
-§6.2 are implemented as written; the sample is drawn with the
-process's own randomness.
+are fetched from `checkpoint - 2848`: Monero's difficulty window plus
+lag (735) and one RandomX seed epoch plus its lag (2048 + 64 + 1), so
+that every block after the checkpoint has a full difficulty window and
+every block whose proof-of-work is checked has its seed block in view.
+Cumulative work is counted from the checkpoint: difficulties at or
+before it are served, not derived, so counting them would let a source
+buy the comparison with a number nobody verified. Every block in the
+difficulty window up to and including the checkpoint has its
+proof-of-work checked against its served difficulty, which bounds those
+difficulties above by real work; over-claiming is caught there, and
+under-claiming only lowers the source's own post-checkpoint difficulty
+and therefore its own work. Blocks older than that window are
+authenticated by linkage to the checkpoint hash alone. Blocks after the
+checkpoint get their difficulty recomputed by Monero's
+`next_difficulty` (window 720, lag 15, cut 60, target 120 s) and
+checked against the served value. A tip more than 400000 blocks past
+the checkpoint is refused outright, so a hostile tip cannot page a
+reader into an allocation death; a release checkpoint older than that
+must be refreshed. Ship a fresh checkpoint with each release. The
+30-minute stale-tip rule and the sampling rule of §6.2 are implemented
+as written for blocks after the checkpoint, with the sample drawn from
+the process's own randomness. A reader that already holds a verified
+view asks each source only for the rows that extend it and verifies
+those against it in full; a source that does not extend it is refetched
+from the lookback start.
 
 **Proof-of-work backend.** Verification takes a hasher
 `pow_hash(blob, height, seed_hash) -> 32 bytes`. The production
@@ -844,8 +855,12 @@ header fields, pruned at four windows of age, like P2Pool.
 
 **Built-in venues.** The consensus ids of P2Pool main, mini and nano
 are copied from `side_chain.cpp`; `--anchor-venues` adds or replaces
-them. A venue discovered from a tag but not configured is resolved
-only if some transpeer serves its shares.
+them. A venue discovered from a tag but not configured is resolved only
+if some transpeer serves its shares. `GET /venues` returns the
+consensus ids a node serves, rate-limited and without handshake
+proof-of-work, so a reader can find those transpeers' venues; each sync
+takes the configured venues plus at most 16 newly advertised ones, and
+keeps and serves a discovered venue's shares like a configured one.
 
 **Gossip.** Each query cycle, after `/transpeers`, the node asks the
 queried transpeer for `/blobs/index` since the cursor it holds for
