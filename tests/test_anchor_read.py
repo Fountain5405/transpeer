@@ -865,9 +865,65 @@ async def test_store_tags_ranking():
         victim = store2._transpeers.get(victim_key)
         check(victim is not None and victim.unfaithful,
               "_pick_eviction prefers the unfaithful transpeer's bucket")
+
+        # Fallback: the only unfaithful entry's bucket equals incoming_bucket
+        # (no "elsewhere" candidate) -> its own bucket is still picked.
+        own_bucket = store2._bucket_of(tp_b)
+        fallback_key = store2._pick_eviction(incoming_bucket=own_bucket)
+        check(fallback_key == store2._transpeers[f"{tp_b}:7337"].key,
+              "eviction fallback still picks the sole unfaithful entry when its "
+              "bucket equals the incoming bucket")
         await store2.close()
     finally:
         await store.close()
+
+
+async def test_query_batch_bucketed_anchor_read():
+    print("bucketed query batch: unfaithful membership under --anchor-read vs default")
+    from transpeer.config import Config
+    from transpeer.peerstore import PeerStore, TranspeerEntry
+
+    now = int(time.time())
+    # Three transpeers in three distinct /16 buckets, plus a fourth sharing
+    # the first's bucket. The first is marked unfaithful.
+    t1 = "20.1.0.1"   # bucket A, unfaithful
+    t2 = "21.1.0.1"   # bucket B
+    t3 = "22.1.0.1"   # bucket C
+    t4 = "20.1.0.2"   # bucket A, same as t1
+
+    async def build(cfg):
+        store = PeerStore(cfg)
+        await store.init()
+        for addr in (t1, t2, t3, t4):
+            await store.add_transpeer(TranspeerEntry(addr=addr, port=7337, last_seen=now))
+        await store.set_unfaithful(t1, 7337, True)
+        return store
+
+    cfg_on = Config(in_memory=True, vouchers=True, bucketed=True, anchor_read=True,
+                    anchor_checkpoint="0:" + "00" * 32, no_verify=True)
+    store_on = await build(cfg_on)
+    try:
+        q3 = store_on.get_transpeers_for_query(3)
+        check(len(q3) == 3 and t1 not in {t.addr for t in q3},
+              "anchor_read on: unfaithful entry absent from a batch of 3 "
+              "when 3 faithful entries from distinct buckets exist")
+        q4 = store_on.get_transpeers_for_query(4)
+        check(len(q4) == 4 and q4[-1].addr == t1,
+              "anchor_read on: unfaithful entry present and last with limit=4")
+    finally:
+        await store_on.close()
+
+    cfg_off = Config(in_memory=True, vouchers=True, bucketed=True, anchor_read=False,
+                      anchor_checkpoint="0:" + "00" * 32, no_verify=True)
+    store_off = await build(cfg_off)
+    try:
+        q3_off = store_off.get_transpeers_for_query(3)
+        addrs_off = {t.addr for t in q3_off}
+        check(len(q3_off) == 3 and t1 in addrs_off,
+              "anchor_read off: previous membership rule keeps the early-break "
+              "round-robin, ignoring the unfaithful flag")
+    finally:
+        await store_off.close()
 
 
 if __name__ == "__main__":
@@ -882,5 +938,6 @@ if __name__ == "__main__":
     asyncio.run(test_reader_hostile_headers())
     asyncio.run(test_reader_hostile_fork())
     asyncio.run(test_store_tags_ranking())
+    asyncio.run(test_query_batch_bucketed_anchor_read())
     print(f"\n{passed} passed, {failed} failed")
     sys.exit(1 if failed else 0)
