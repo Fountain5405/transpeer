@@ -12,14 +12,13 @@ from ..peerstore import PeerStore, TranspeerEntry
 from .blob import BlobError, decode_blob
 from .blobdb import BlobDB, Commitment
 from .fetch import AnchorClient
-from .headers import Checkpoint, HeaderRow, best_view, parse_checkpoint, verify_headers
+from .headers import (Checkpoint, HEADER_LOOKBACK, HeaderError, HeaderRow, best_view,
+                      parse_checkpoint, verify_headers)
 from .merkle import aux_slot, parse_tx_extra_mm_tag, verify_merkle_proof
-from .monero import (
-    DIFFICULTY_BLOCKS_COUNT, MONERO_BLOCK_TIME, hashing_blob, parse_block_blob,
-)
+from .monero import MONERO_BLOCK_TIME, hashing_blob, parse_block_blob, seed_height
 from .powhash import PowBackend
 from .share import VENUE_WINDOW, VENUES, parse_share, transpeer_aux, verify_share_pow
-from .stores import AnchorStore, ShareStore
+from .stores import AnchorStore, ShareStore, venue_dir
 from .weight import Share as WeightShare, blob_weights, bootstrapped, coverage, transpeer_weights
 
 logger = logging.getLogger(__name__)
@@ -28,6 +27,24 @@ MAX_SOURCES = 5
 HEADER_PAGE = 720
 SHARE_PAGE = 64
 TOP_N_PUBLISH = 64
+# A tip further past the checkpoint than this is refused: a hostile tip
+# of 10**18 would otherwise page the reader into an allocation death.
+# About 1.5 years of Monero blocks; a release checkpoint older than that
+# must be refreshed (spec §17.1).
+MAX_BLOCKS_PAST_CHECKPOINT = 400_000
+# Per-sync fetch budgets. A sync that runs out ends normally; the next
+# cycle continues where it stopped.
+MAX_BLOCK_FETCHES = 720
+MAX_SHARE_BATCHES = 40
+MAX_LEAF_FETCHES = 256
+# Total timeout the reader gives each request to another transpeer.
+CLIENT_TIMEOUT = 5.0
+# Venues a sync will take from what sources advertise, on top of the
+# configured ones (spec §6.4: venues are discovered from tags).
+MAX_DISCOVERED_VENUES = 16
+# A newcomer that has fetched less of the coverage window than this is
+# never bootstrapped, whatever the coverage of what it did fetch.
+MIN_WINDOW_FETCHED = 0.9
 
 
 def coverage_from(view, anchor_window_days: float) -> int:
@@ -64,6 +81,8 @@ class ReaderState:
     coverage: float = 0.0
     bootstrapped: bool = False
     tip_height: int | None = None
+    window_blocks: int = 0
+    fetched_blocks: int = 0
     venues: dict = field(default_factory=dict)          # venue -> canonical tip share id
     weights: dict = field(default_factory=dict)          # (addr, port) -> weight
     published: list = field(default_factory=list)        # [(addr, port), ...]
@@ -95,35 +114,100 @@ class Reader:
         now = self.clock()
         sources = list(sources)[:MAX_SOURCES]
         checkpoint = parse_checkpoint(self.config.anchor_checkpoint)
-        venues = venues_from_config(self.config)
 
-        view = await self._step1_headers(sources, checkpoint, now)
-        if view is None:
-            self.state.bootstrapped = False
+        try:
+            view = await self._step1_headers(sources, checkpoint, now)
+            if view is None:
+                self.state.bootstrapped = False
+                self._log_state()
+                return self.state
+
+            window_from = coverage_from(view, self.config.anchor_window_days)
+            tagged, missing, fetched = await self._step2_coverage_window(
+                sources, view, window_from)
+            venues = await self._candidate_venues(sources)
+            venue_tips, resolved = await self._step3_venue_leaves(sources, tagged, venues, view)
+            canonical = await self._step4_canonical_fork(sources, venue_tips, view)
+            await self._step5_blobs(sources, canonical)
+            weights = self._step6_weights(canonical)
+            published = await self._step7_seeding(weights, now)
+        except (ValueError, TypeError, KeyError) as e:
+            # Source data is untrusted: a sync abandoned on it keeps the
+            # last good state rather than taking down the reader loop.
+            logger.warning("READER: sync abandoned: %s", e)
             self._log_state()
             return self.state
 
-        tagged = await self._step2_coverage_window(sources, view)
-        venue_tips, resolved = await self._step3_venue_leaves(sources, tagged, venues)
-        canonical = await self._step4_canonical_fork(sources, venue_tips)
-        await self._step5_blobs(sources, canonical)
-        weights = self._step6_weights(canonical)
-        published = await self._step7_seeding(weights, now)
-
+        window_blocks = view.tip_height - window_from + 1
+        tagged_total = len(tagged) + missing
+        self._prune(view, checkpoint, canonical, window_from)
         self.state = ReaderState(
-            tagged=len(tagged), resolved=resolved,
-            coverage=coverage(len(tagged), resolved),
-            bootstrapped=bootstrapped(len(tagged), resolved),
-            tip_height=view.tip_height, venues=dict(venue_tips),
-            weights=weights, published=published, last_sync=now,
+            tagged=tagged_total, resolved=resolved,
+            coverage=coverage(tagged_total, resolved),
+            bootstrapped=(bootstrapped(tagged_total, resolved)
+                          and fetched >= MIN_WINDOW_FETCHED * window_blocks),
+            tip_height=view.tip_height, window_blocks=window_blocks, fetched_blocks=fetched,
+            venues=dict(venue_tips), weights=weights, published=published, last_sync=now,
         )
         self._log_state()
         return self.state
 
+    def _venue_store(self, cid: bytes) -> ShareStore:
+        """The store for a venue, created on first use so that venues
+        discovered from tags are kept and served like configured ones."""
+        store = self.shares.get(cid)
+        if store is None:
+            path = None if self.config.in_memory else venue_dir(self.config.data_dir, cid)
+            store = ShareStore(cid, path)
+            self.shares[cid] = store
+        return store
+
+    async def _candidate_venues(self, sources: list) -> dict:
+        """Configured venues plus what the sources advertise at /venues,
+        at most MAX_DISCOVERED_VENUES new ones per sync (spec §6.4)."""
+        venues = venues_from_config(self.config)
+        discovered = 0
+        for addr, port in sources:
+            if discovered >= MAX_DISCOVERED_VENUES:
+                break
+            for cid in await self.client.fetch_venues(addr, port):
+                if cid in venues:
+                    continue
+                if discovered >= MAX_DISCOVERED_VENUES:
+                    break
+                venues[cid] = cid.hex()
+                discovered += 1
+        return venues
+
+    def _seed_for(self, view, height: int):
+        """The RandomX seed hash for a block or share at `height`: the id
+        of the block at its seed height, or None when the view does not
+        reach that far back."""
+        sh = seed_height(height)
+        if view is None or not (view.first <= sh <= view.tip_height):
+            return None
+        return view.id_at(sh)
+
+    def _prune(self, view, checkpoint: Checkpoint, canonical: dict, window_from: int) -> None:
+        """Block blobs older than the coverage window and headers older
+        than the lookback are dead weight; venue stores prune as P2Pool
+        does, at four windows of age."""
+        self.anchor.prune_blocks(max(0, window_from - 1))
+        self.anchor.prune_headers(max(0, checkpoint.height - HEADER_LOOKBACK))
+        for cid, chain in canonical.items():
+            if chain:
+                self._venue_store(cid).prune(chain[0].height)
+
     async def _step1_headers(self, sources: list, checkpoint: Checkpoint, now: float):
         """Headers: fetch, verify and keep the best-work candidate view
-        per source; store the winner in the anchor store."""
+        per source; store the winner in the anchor store. With a view
+        already verified, each source is asked only for what extends it
+        and the extension is verified against that trusted prefix; a
+        source on another chain (or a reorg) falls back to a full fetch
+        from the lookback start."""
         chain = self.config.anchor_chain
+        existing = self.anchor.view
+        kwargs = {"rng": self.rng} if self.rng is not None else {}
         views = []
         for addr, port in sources:
             try:
@@ -131,53 +215,32 @@ class Reader:
                 if tip is None:
                     logger.warning("READER: no tip from %s:%d", addr, port)
                     continue
-                existing = self.anchor.view
-                if existing is not None and existing.tip_height > checkpoint.height:
-                    from_height = max(0, existing.tip_height - DIFFICULTY_BLOCKS_COUNT)
-                else:
-                    from_height = max(0, checkpoint.height - DIFFICULTY_BLOCKS_COUNT)
-                rows = []
-                cur = from_height
-                abandoned = False
-                while cur <= tip:
-                    count = min(HEADER_PAGE, tip - cur + 1)
-                    page = await self.client.fetch_headers(addr, port, chain, cur, count)
-                    if not page or page[0].height != cur:
-                        logger.warning("READER: %s:%d served an empty or misaligned "
-                                       "header page at %d", addr, port, cur)
-                        abandoned = True
-                        break
-                    ok = True
-                    for i in range(1, len(page)):
-                        if page[i].height != page[i - 1].height + 1:
-                            ok = False
-                            break
-                    if not ok:
-                        logger.warning("READER: %s:%d served a non-contiguous header page "
-                                       "at %d", addr, port, cur)
-                        abandoned = True
-                        break
-                    # Never trust a page past the tip we asked for.
-                    page = [row for row in page if row.height <= tip]
-                    if not page:
-                        break
-                    rows.extend(page)
-                    progressed = page[-1].height + 1
-                    if progressed <= cur:
-                        logger.warning("READER: %s:%d header page made no progress at %d",
-                                       addr, port, cur)
-                        abandoned = True
-                        break
-                    cur = progressed
-                    if len(page) < count:
-                        break
-                if abandoned or not rows:
-                    if not abandoned:
-                        logger.warning("READER: no headers from %s:%d", addr, port)
+                if not (checkpoint.height <= tip <= checkpoint.height + MAX_BLOCKS_PAST_CHECKPOINT):
+                    logger.warning("READER: %s:%d reports tip %d, out of bounds for "
+                                   "checkpoint %d", addr, port, tip, checkpoint.height)
                     continue
-                kwargs = {"rng": self.rng} if self.rng is not None else {}
-                view = verify_headers(rows, checkpoint, self.pow, now, **kwargs)
-            except ValueError as e:
+                view = None
+                if existing is not None and existing.tip_height >= checkpoint.height:
+                    if tip <= existing.tip_height:
+                        views.append(existing)
+                        continue
+                    rows = await self._fetch_header_range(
+                        addr, port, chain, existing.tip_height + 1, tip)
+                    if rows:
+                        try:
+                            view = verify_headers(rows, checkpoint, self.pow, now,
+                                                  trusted=existing, **kwargs)
+                        except HeaderError as e:
+                            logger.warning("READER: %s:%d does not extend the stored tip "
+                                           "(%s); refetching in full", addr, port, e)
+                            view = None
+                if view is None:
+                    start = max(0, checkpoint.height - HEADER_LOOKBACK)
+                    rows = await self._fetch_header_range(addr, port, chain, start, tip)
+                    if not rows:
+                        continue
+                    view = verify_headers(rows, checkpoint, self.pow, now, **kwargs)
+            except (ValueError, TypeError, KeyError) as e:
                 logger.warning("READER: headers from %s:%d rejected: %s", addr, port, e)
                 continue
             views.append(view)
@@ -191,42 +254,89 @@ class Reader:
         self.anchor.view = view
         return view
 
-    async def _step2_coverage_window(self, sources: list, view) -> dict:
+    async def _fetch_header_range(self, addr: str, port: int, chain: str,
+                                  from_height: int, tip: int) -> list:
+        """Page [from_height, tip] from one source. Returns [] when the
+        source pages badly (empty, misaligned, non-contiguous or making
+        no progress) rather than trusting a partial run."""
+        rows = []
+        cur = from_height
+        while cur <= tip:
+            count = min(HEADER_PAGE, tip - cur + 1)
+            page = await self.client.fetch_headers(addr, port, chain, cur, count)
+            if not page or page[0].height != cur:
+                logger.warning("READER: %s:%d served an empty or misaligned "
+                               "header page at %d", addr, port, cur)
+                return []
+            for i in range(1, len(page)):
+                if page[i].height != page[i - 1].height + 1:
+                    logger.warning("READER: %s:%d served a non-contiguous header page "
+                                   "at %d", addr, port, cur)
+                    return []
+            # Never trust a page past the tip we asked for.
+            page = [row for row in page if row.height <= tip]
+            if not page:
+                break
+            rows.extend(page)
+            progressed = page[-1].height + 1
+            if progressed <= cur:
+                logger.warning("READER: %s:%d header page made no progress at %d",
+                               addr, port, cur)
+                return []
+            cur = progressed
+            if len(page) < count:
+                break
+        if not rows:
+            logger.warning("READER: no headers from %s:%d", addr, port)
+        return rows
+
+    async def _step2_coverage_window(self, sources: list, view, window_from: int):
         """Coverage window: fetch and verify coinbases, keep the
-        merge-mining tag per tagged block."""
+        merge-mining tag per tagged block. Returns the tags, the count of
+        window blocks whose blob no source served (spec §8: they count as
+        tagged and unresolved, so withholding cannot raise coverage) and
+        the count of window blocks held."""
         chain = self.config.anchor_chain
-        window_from = coverage_from(view, self.config.anchor_window_days)
         tagged = {}
+        missing = 0
+        fetched = 0
+        budget = MAX_BLOCK_FETCHES
         for height in range(window_from, view.tip_height + 1):
             blob = self.anchor.block(height)
-            if blob is None:
+            if blob is None and budget > 0:
                 for addr, port in sources:
-                    fetched = await self.client.fetch_block(addr, port, chain, height)
-                    if fetched is None:
-                        continue
+                    if budget <= 0:
+                        break
+                    budget -= 1
                     try:
-                        if hashing_blob(fetched) != view.blobs[height - view.first]:
+                        candidate = await self.client.fetch_block(addr, port, chain, height)
+                        if candidate is None:
                             continue
-                    except ValueError:
+                        if hashing_blob(candidate) != view.blobs[height - view.first]:
+                            continue
+                    except (ValueError, TypeError, KeyError, IndexError):
                         continue
-                    blob = fetched
+                    blob = candidate
                     self.anchor.put_block(height, blob)
                     break
             if blob is None:
+                missing += 1
                 continue
+            fetched += 1
             try:
                 tag = parse_tx_extra_mm_tag(parse_block_blob(blob).tx_extra)
-            except ValueError:
+            except (ValueError, TypeError, KeyError):
                 tag = None
             if tag is not None:
                 tagged[height] = tag
-        return tagged
+        return tagged, missing, fetched
 
-    async def _step3_venue_leaves(self, sources: list, tagged: dict, venues: dict):
+    async def _step3_venue_leaves(self, sources: list, tagged: dict, venues: dict, view):
         """Venue leaves: resolve each tagged block's venue leaves to
         shares; the first (newest) share per venue is its canonical tip."""
         venue_tips: dict = {}
         resolved = 0
+        budget = MAX_LEAF_FETCHES
         for height in sorted(tagged, reverse=True):
             tag = tagged[height]
             used_slots = set()
@@ -235,11 +345,14 @@ class Reader:
                 slot = aux_slot(cid, tag.nonce, tag.n_aux_chains)
                 if slot in used_slots:
                     continue
-                venue_store = self.shares.setdefault(cid, ShareStore(cid, None))
+                venue_store = self._venue_store(cid)
                 share = venue_store.by_root(tag.root)
                 if share is None:
                     raw = None
                     for addr, port in sources:
+                        if budget <= 0:
+                            break
+                        budget -= 1
                         raw = await self.client.fetch_share_by_root(addr, port, cid, tag.root)
                         if raw is not None:
                             break
@@ -247,10 +360,16 @@ class Reader:
                         continue
                     try:
                         share = parse_share(raw, cid)
-                    except ValueError:
+                    except (ValueError, TypeError, KeyError):
                         continue
+                seed = self._seed_for(view, share.txin_gen_height)
+                if seed is None:
+                    logger.warning("READER: share %s names height %d, outside the view",
+                                   share.id.hex(), share.txin_gen_height)
+                    continue
                 if (share.merkle_root != tag.root or share.n_aux_chains != tag.n_aux_chains
-                        or share.aux_nonce != tag.nonce or not verify_share_pow(share, self.pow)):
+                        or share.aux_nonce != tag.nonce
+                        or not verify_share_pow(share, self.pow, seed)):
                     continue
                 venue_store.add(share)
                 used_slots.add(slot)
@@ -261,24 +380,26 @@ class Reader:
                 resolved += 1
         return venue_tips, resolved
 
-    async def _step4_canonical_fork(self, sources: list, venue_tips: dict) -> dict:
+    async def _step4_canonical_fork(self, sources: list, venue_tips: dict, view) -> dict:
         """Canonical fork: walk each venue's tip back through the weight
         window, fetching missing ancestors. Every fetched batch must be
         anchored to the parent id we asked for -- batch[0].id == parent,
         and each following share is the previous one's named parent, one
         height lower -- so a source cannot feed unrelated shares forever;
         the walk is also hard-capped at VENUE_WINDOW regardless of what
-        any source does."""
+        any source does, and at MAX_SHARE_BATCHES batches per sync."""
         canonical = {}
         for cid, tip_id in venue_tips.items():
-            venue_store = self.shares.setdefault(cid, ShareStore(cid, None))
+            venue_store = self._venue_store(cid)
             chain = venue_store.walk(tip_id, VENUE_WINDOW)
-            while chain and len(chain) < VENUE_WINDOW:
+            batches = 0
+            while chain and len(chain) < VENUE_WINDOW and batches < MAX_SHARE_BATCHES:
                 parent = chain[-1].parent
                 if parent == bytes(32) or venue_store.get(parent) is not None:
                     break
                 added = 0
                 for addr, port in sources:
+                    batches += 1
                     raw_list = await self.client.fetch_shares(addr, port, cid, parent, SHARE_PAGE)
                     if not raw_list:
                         continue
@@ -288,11 +409,12 @@ class Reader:
                     for raw in raw_list:
                         try:
                             share = parse_share(raw, cid)
-                        except ValueError:
+                        except (ValueError, TypeError, KeyError):
                             logger.warning("READER: %s:%d served an unparseable share "
                                            "in venue %s", addr, port, cid.hex())
                             break
-                        if not verify_share_pow(share, self.pow):
+                        seed = self._seed_for(view, share.txin_gen_height)
+                        if seed is None or not verify_share_pow(share, self.pow, seed):
                             logger.warning("READER: %s:%d served a share with invalid "
                                            "PoW in venue %s", addr, port, cid.hex())
                             break
@@ -335,7 +457,7 @@ class Reader:
                     continue
                 try:
                     decode_blob(blob)
-                except BlobError:
+                except (BlobError, ValueError, TypeError, KeyError):
                     continue
                 commitment = Commitment(h, "share", cid.hex(), share.id.hex(), share.wallet,
                                         share.difficulty, share.timestamp)
@@ -373,8 +495,10 @@ class Reader:
     def _log_state(self) -> None:
         s = self.state
         logger.info(
-            "READER_STATE tagged=%d resolved=%d coverage=%.2f bootstrapped=%s tip=%s venues=%d published=%d",
-            s.tagged, s.resolved, s.coverage, s.bootstrapped, s.tip_height, len(s.venues), len(s.published),
+            "READER_STATE tagged=%d resolved=%d coverage=%.2f bootstrapped=%s tip=%s "
+            "window=%d fetched=%d venues=%d published=%d",
+            s.tagged, s.resolved, s.coverage, s.bootstrapped, s.tip_height,
+            s.window_blocks, s.fetched_blocks, len(s.venues), len(s.published),
         )
 
     # -- blob gossip, spec §5 ------------------------------------------------
@@ -458,7 +582,8 @@ class Reader:
             share = parse_share(raw, venue)
         except ValueError:
             return False
-        if not verify_share_pow(share, self.pow):
+        seed = self._seed_for(self.anchor.view, share.txin_gen_height)
+        if seed is None or not verify_share_pow(share, self.pow, seed):
             return False
         return transpeer_aux(share) == commitment.hash
 

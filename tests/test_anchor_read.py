@@ -720,6 +720,108 @@ async def test_reader():
             await r_store.close()
 
 
+def mine_block(pow, height, ts, prev, difficulty=50, tx_extra=None):
+    """One anchor block at `height` on top of `prev`; returns (HeaderRow, blob)."""
+    from transpeer.anchor.headers import HeaderRow
+    from transpeer.anchor.monero import build_block_blob, hashing_blob, check_hash
+    if tx_extra is None:
+        tx_extra = b"\x01" + bytes(32)
+    nonce = 0
+    while True:
+        block = build_block_blob(16, 16, ts, prev, nonce, height, tx_extra)
+        hb = hashing_blob(block)
+        if check_hash(pow.hash(hb, height, bytes(32)), difficulty):
+            return HeaderRow(height, hb, difficulty), block
+        nonce += 1
+
+
+async def test_reader_resync():
+    print("reader: repeated syncs follow the tip, and a reorg")
+    from aiohttp import web
+    from transpeer.config import Config
+    from transpeer.peerstore import PeerStore
+    from transpeer.server import TranspeerServer
+    from transpeer.anchor.blobdb import BlobDB, Commitment
+    from transpeer.anchor.fetch import AnchorClient
+    from transpeer.anchor.monero import block_id
+    from transpeer.anchor.powhash import Sha256Pow
+    from transpeer.anchor.reader import Reader
+    from transpeer.anchor.stores import AnchorStore, ShareStore
+
+    pow = Sha256Pow()
+    world = build_world(pow)
+    rows, blocks, shares = world["rows"], world["blocks"], world["shares"]
+    venue, checkpoint = world["venue"], world["checkpoint"]
+    start_ts = 1_700_000_000
+    now = start_ts + 120 * 50
+
+    srv_anchor = AnchorStore(None)
+    srv_anchor.put_headers(rows)
+    for h, blob in blocks.items():
+        srv_anchor.put_block(h, blob)
+    srv_shares = ShareStore(venue, None)
+    for sh in shares:
+        srv_shares.add(sh)
+    srv_db = BlobDB()
+    srv_db.add(world["blobs"]["A"], Commitment(world["hash_a"], "template", "v", "", "p", 0, 0), now)
+    srv_db.add(world["blobs"]["B"], Commitment(world["hash_b"], "template", "v", "", "p", 0, 0), now)
+
+    def grow(n, from_height):
+        prev = block_id(srv_anchor.headers[from_height - 1].blob)
+        for h in range(from_height, from_height + n):
+            row, block = mine_block(pow, h, start_ts + 120 * h, prev)
+            srv_anchor.put_headers([row])
+            srv_anchor.put_block(h, block)
+            prev = block_id(row.blob)
+
+    cfg = Config(in_memory=True, no_verify=True, anchor_chain="monero",
+                 port=17359, bind="127.0.0.1")
+    srv_store = PeerStore(cfg)
+    await srv_store.init()
+    srv = TranspeerServer(cfg, srv_store, "resync_srv", time.time(), network_names=["monero"],
+                          blobdb=srv_db, anchor_store=srv_anchor, share_stores={venue: srv_shares})
+    runner = web.AppRunner(srv.create_app())
+    await runner.setup()
+    await web.TCPSite(runner, "127.0.0.1", 17359).start()
+
+    r_store = None
+    try:
+        rcfg = Config(in_memory=True, no_verify=True, anchor_chain="monero",
+                      anchor_checkpoint=f"5:{checkpoint.hash.hex()}", anchor_venues="mini",
+                      anchor_window_days=10 * 120 / 86400, port=17362, bind="127.0.0.1")
+        r_store = PeerStore(rcfg)
+        await r_store.init()
+        r_anchor = AnchorStore(None)
+        reader = Reader(rcfg, r_store, BlobDB(), r_anchor, {}, AnchorClient(rcfg), pow,
+                        clock=lambda: now)
+        tips = []
+        boot = []
+        for i in range(3):
+            if i:
+                grow(3, 40 + 3 * (i - 1))
+            st = await asyncio.wait_for(reader.sync([("127.0.0.1", 17359)]), timeout=30)
+            tips.append(st.tip_height)
+            boot.append(st.bootstrapped)
+        check(tips == [39, 42, 45], f"tip advances on every sync: {tips}")
+        check(all(boot), "bootstrapped stays true across syncs")
+
+        # Reorg: the last two blocks are replaced by three different ones.
+        for h in (44, 45):
+            del srv_anchor.headers[h]
+            del srv_anchor.blocks[h]
+        grow(3, 44)
+        st = await asyncio.wait_for(reader.sync([("127.0.0.1", 17359)]), timeout=30)
+        check(st.tip_height == 46, f"reader follows the longer reorganised chain: {st.tip_height}")
+        check(reader.anchor.view.tip_id == block_id(srv_anchor.headers[46].blob),
+              "the reader's tip is the serving node's new tip")
+        check(st.bootstrapped, "still bootstrapped after the reorg")
+    finally:
+        await runner.cleanup()
+        await srv_store.close()
+        if r_store is not None:
+            await r_store.close()
+
+
 async def test_reader_hostile_headers():
     print("reader: hostile header source cannot hang the paging loop")
     from aiohttp import web
@@ -756,6 +858,312 @@ async def test_reader_hostile_headers():
     finally:
         await runner.cleanup()
         await store.close()
+
+
+async def test_reader_hostile_tip_and_types():
+    print("reader: absurd tips and malformed JSON do not stop a good source")
+    from aiohttp import web
+    from transpeer.config import Config
+    from transpeer.peerstore import PeerStore
+    from transpeer.server import TranspeerServer
+    from transpeer.anchor.blobdb import BlobDB, Commitment
+    from transpeer.anchor.fetch import AnchorClient
+    from transpeer.anchor.powhash import Sha256Pow
+    from transpeer.anchor.reader import Reader
+    from transpeer.anchor.stores import AnchorStore, ShareStore
+
+    pow = Sha256Pow()
+    world = build_world(pow)
+    rows, blocks, shares = world["rows"], world["blocks"], world["shares"]
+    venue, checkpoint = world["venue"], world["checkpoint"]
+    now = 1_700_000_000 + 120 * 39 + 60
+
+    async def huge_tip(request):
+        # Contiguous pages for ever, and a tip no honest chain has.
+        frm = int(request.query.get("from", 0))
+        count = min(int(request.query.get("count", 720)), 720)
+        page = [{"height": frm + i, "blob": rows[0].blob.hex(), "difficulty": 50}
+                for i in range(count)]
+        return web.json_response({"chain": "monero", "tip": 10 ** 18, "headers": page})
+
+    async def bad_tip(request):
+        return web.json_response({"chain": "monero", "tip": "x", "headers": []})
+
+    async def rows_without_difficulty(request):
+        frm = int(request.query.get("from", 0))
+        count = min(int(request.query.get("count", 720)), 720)
+        page = [{"height": r.height, "blob": r.blob.hex()}
+                for r in rows if r.height >= frm][:count]
+        return web.json_response({"chain": "monero", "tip": 39, "headers": page})
+
+    hostiles = []
+    for port, handler in ((17363, huge_tip), (17364, bad_tip), (17365, rows_without_difficulty)):
+        app = web.Application()
+        app.router.add_get("/anchor/{chain}/headers", handler)
+        runner = web.AppRunner(app)
+        await runner.setup()
+        await web.TCPSite(runner, "127.0.0.1", port).start()
+        hostiles.append(runner)
+
+    srv_anchor = AnchorStore(None)
+    srv_anchor.put_headers(rows)
+    for h, blob in blocks.items():
+        srv_anchor.put_block(h, blob)
+    srv_shares = ShareStore(venue, None)
+    for sh in shares:
+        srv_shares.add(sh)
+    srv_db = BlobDB()
+    srv_db.add(world["blobs"]["A"], Commitment(world["hash_a"], "template", "v", "", "p", 0, 0), now)
+    srv_db.add(world["blobs"]["B"], Commitment(world["hash_b"], "template", "v", "", "p", 0, 0), now)
+    cfg = Config(in_memory=True, no_verify=True, anchor_chain="monero",
+                 port=17366, bind="127.0.0.1")
+    srv_store = PeerStore(cfg)
+    await srv_store.init()
+    srv = TranspeerServer(cfg, srv_store, "types_srv", time.time(), network_names=["monero"],
+                          blobdb=srv_db, anchor_store=srv_anchor, share_stores={venue: srv_shares})
+    runner = web.AppRunner(srv.create_app())
+    await runner.setup()
+    await web.TCPSite(runner, "127.0.0.1", 17366).start()
+
+    r_store = None
+    try:
+        rcfg = Config(in_memory=True, no_verify=True, anchor_chain="monero",
+                      anchor_checkpoint=f"5:{checkpoint.hash.hex()}", anchor_venues="mini",
+                      anchor_window_days=10 * 120 / 86400, port=17367, bind="127.0.0.1")
+        r_store = PeerStore(rcfg)
+        await r_store.init()
+        reader = Reader(rcfg, r_store, BlobDB(), AnchorStore(None), {}, AnchorClient(rcfg),
+                        pow, clock=lambda: now)
+        sources = [("127.0.0.1", 17363), ("127.0.0.1", 17364),
+                   ("127.0.0.1", 17365), ("127.0.0.1", 17366)]
+        state = await asyncio.wait_for(reader.sync(sources), timeout=30)
+        check(state.tip_height == 39, f"the good source's view wins: {state.tip_height}")
+        check(state.bootstrapped, "sync completes and bootstraps despite three bad sources")
+    finally:
+        for runner_ in hostiles:
+            await runner_.cleanup()
+        await runner.cleanup()
+        await srv_store.close()
+        if r_store is not None:
+            await r_store.close()
+
+
+async def test_reader_withheld_coinbases():
+    print("reader: withheld coinbases lower coverage, they do not raise it")
+    from aiohttp import web
+    from transpeer.config import Config
+    from transpeer.peerstore import PeerStore
+    from transpeer.server import TranspeerServer
+    from transpeer.anchor.blobdb import BlobDB, Commitment
+    from transpeer.anchor.fetch import AnchorClient
+    from transpeer.anchor.powhash import Sha256Pow
+    from transpeer.anchor.reader import Reader
+    from transpeer.anchor.stores import AnchorStore, ShareStore
+
+    pow = Sha256Pow()
+    world = build_world(pow)
+    rows, blocks, shares = world["rows"], world["blocks"], world["shares"]
+    venue, checkpoint = world["venue"], world["checkpoint"]
+    now = 1_700_000_000 + 120 * 39 + 60
+
+    srv_anchor = AnchorStore(None)
+    srv_anchor.put_headers(rows)
+    srv_anchor.put_block(39, blocks[39])          # the only coinbase served
+    srv_shares = ShareStore(venue, None)
+    for sh in shares:
+        srv_shares.add(sh)
+    srv_db = BlobDB()
+    srv_db.add(world["blobs"]["B"], Commitment(world["hash_b"], "template", "v", "", "p", 0, 0), now)
+
+    cfg = Config(in_memory=True, no_verify=True, anchor_chain="monero",
+                 port=17368, bind="127.0.0.1")
+    srv_store = PeerStore(cfg)
+    await srv_store.init()
+    srv = TranspeerServer(cfg, srv_store, "withhold_srv", time.time(), network_names=["monero"],
+                          blobdb=srv_db, anchor_store=srv_anchor, share_stores={venue: srv_shares})
+    runner = web.AppRunner(srv.create_app())
+    await runner.setup()
+    await web.TCPSite(runner, "127.0.0.1", 17368).start()
+
+    r_store = None
+    try:
+        rcfg = Config(in_memory=True, no_verify=True, anchor_chain="monero",
+                      anchor_checkpoint=f"5:{checkpoint.hash.hex()}", anchor_venues="mini",
+                      anchor_window_days=9 * 120 / 86400, port=17362, bind="127.0.0.1")
+        r_store = PeerStore(rcfg)
+        await r_store.init()
+        reader = Reader(rcfg, r_store, BlobDB(), AnchorStore(None), {}, AnchorClient(rcfg),
+                        pow, clock=lambda: now)
+        state = await asyncio.wait_for(reader.sync([("127.0.0.1", 17368)]), timeout=30)
+        check(state.window_blocks == 10 and state.fetched_blocks == 1,
+              f"window of 10 blocks, 1 fetched: {state.window_blocks}/{state.fetched_blocks}")
+        check(state.tagged == 10 and state.resolved == 1,
+              f"unavailable blocks count as tagged and unresolved: {state.tagged}/{state.resolved}")
+        check(abs(state.coverage - 0.1) < 1e-9, f"coverage 0.1, not 1.0: {state.coverage}")
+        check(not state.bootstrapped, "withholding the window cannot bootstrap the reader")
+    finally:
+        await runner.cleanup()
+        await srv_store.close()
+        if r_store is not None:
+            await r_store.close()
+
+
+async def test_reader_discovered_venue():
+    print("reader: a venue discovered from /venues is resolved and its weight adds")
+    from aiohttp import web
+    from transpeer.config import Config
+    from transpeer.peerstore import PeerStore
+    from transpeer.server import TranspeerServer
+    from transpeer.anchor import CHAIN_ID
+    from transpeer.anchor.blob import blob_hash as _blob_hash, encode_blob
+    from transpeer.anchor.blobdb import BlobDB, Commitment
+    from transpeer.anchor.fetch import AnchorClient
+    from transpeer.anchor.merkle import build_mm_tag
+    from transpeer.anchor.monero import block_id
+    from transpeer.anchor.powhash import Sha256Pow
+    from transpeer.anchor.reader import Reader
+    from transpeer.anchor.share import VENUES, mine_share, parse_share
+    from transpeer.anchor.stores import AnchorStore, ShareStore
+
+    pow = Sha256Pow()
+    mini, nano = VENUES["mini"], VENUES["nano"]
+    blob = encode_blob("monero", 1, [("20.9.0.1", 7337)])
+    h_blob = _blob_hash(blob)
+    start_ts = 1_700_000_000
+    now = start_ts + 120 * 7 + 60
+
+    def one_share(venue):
+        kw = dict(consensus_id=venue, txin_gen_height=1, prev_id=bytes(32), timestamp=start_ts,
+                  parent=bytes(32), height=0, difficulty=300, cumulative_difficulty=300,
+                  aux={CHAIN_ID: (h_blob, 100000)})
+        return parse_share(mine_share(kw, pow), venue)
+
+    mini_share, nano_share = one_share(mini), one_share(nano)
+
+    rows, blocks = [], {}
+    prev = bytes(32)
+    for height in range(8):
+        tagger = {6: mini_share, 7: nano_share}.get(height)
+        extra = b"\x01" + bytes(32)
+        if tagger is not None:
+            extra += build_mm_tag(tagger.n_aux_chains, tagger.aux_nonce, tagger.merkle_root)
+        row, block = mine_block(pow, height, start_ts + 120 * height, prev, tx_extra=extra)
+        rows.append(row)
+        blocks[height] = block
+        prev = block_id(row.blob)
+    checkpoint_hash = block_id(rows[5].blob)
+
+    srv_anchor = AnchorStore(None)
+    srv_anchor.put_headers(rows)
+    for h, b in blocks.items():
+        srv_anchor.put_block(h, b)
+    srv_stores = {mini: ShareStore(mini, None), nano: ShareStore(nano, None)}
+    srv_stores[mini].add(mini_share)
+    srv_stores[nano].add(nano_share)
+    srv_db = BlobDB()
+    srv_db.add(blob, Commitment(h_blob, "template", "v", "", "p", 0, 0), now)
+
+    cfg = Config(in_memory=True, no_verify=True, anchor_chain="monero",
+                 port=17369, bind="127.0.0.1")
+    srv_store = PeerStore(cfg)
+    await srv_store.init()
+    srv = TranspeerServer(cfg, srv_store, "venues_srv", time.time(), network_names=["monero"],
+                          blobdb=srv_db, anchor_store=srv_anchor, share_stores=srv_stores)
+    runner = web.AppRunner(srv.create_app())
+    await runner.setup()
+    await web.TCPSite(runner, "127.0.0.1", 17369).start()
+
+    r_store = None
+    try:
+        import aiohttp
+        async with aiohttp.ClientSession() as sess:
+            async with sess.get("http://127.0.0.1:17369/venues") as resp:
+                served = set((await resp.json())["venues"])
+        check(served == {mini.hex(), nano.hex()}, "/venues lists the venues the node serves")
+
+        rcfg = Config(in_memory=True, no_verify=True, anchor_chain="monero",
+                      anchor_checkpoint=f"5:{checkpoint_hash.hex()}", anchor_venues="mini",
+                      anchor_window_days=1.0, port=17362, bind="127.0.0.1")
+        r_store = PeerStore(rcfg)
+        await r_store.init()
+        reader = Reader(rcfg, r_store, BlobDB(), AnchorStore(None), {}, AnchorClient(rcfg),
+                        pow, clock=lambda: now)
+        state = await asyncio.wait_for(reader.sync([("127.0.0.1", 17369)]), timeout=30)
+        check(nano in reader.shares and reader.shares[nano].get(nano_share.id) is not None,
+              "the unconfigured venue's share is resolved and stored")
+        check(state.venues.get(nano) == nano_share.id, "the discovered venue has a canonical tip")
+        check(state.weights == {("20.9.0.1", 7337): 600},
+              f"weights are venue-additive across the discovered venue: {state.weights}")
+        check(state.resolved == 2, f"both tags resolved: {state.resolved}")
+    finally:
+        await runner.cleanup()
+        await srv_store.close()
+        if r_store is not None:
+            await r_store.close()
+
+
+async def test_reader_fetch_budget():
+    print("reader: per-sync block-fetch budget, continued next sync")
+    from aiohttp import web
+    from transpeer.config import Config
+    from transpeer.peerstore import PeerStore
+    from transpeer.server import TranspeerServer
+    from transpeer.anchor import reader as reader_mod
+    from transpeer.anchor.blobdb import BlobDB, Commitment
+    from transpeer.anchor.fetch import AnchorClient
+    from transpeer.anchor.powhash import Sha256Pow
+    from transpeer.anchor.reader import Reader
+    from transpeer.anchor.stores import AnchorStore, ShareStore
+
+    pow = Sha256Pow()
+    world = build_world(pow)
+    rows, blocks, shares = world["rows"], world["blocks"], world["shares"]
+    venue, checkpoint = world["venue"], world["checkpoint"]
+    now = 1_700_000_000 + 120 * 39 + 60
+
+    srv_anchor = AnchorStore(None)
+    srv_anchor.put_headers(rows)
+    for h, b in blocks.items():
+        srv_anchor.put_block(h, b)
+    srv_shares = ShareStore(venue, None)
+    for sh in shares:
+        srv_shares.add(sh)
+    srv_db = BlobDB()
+    srv_db.add(world["blobs"]["B"], Commitment(world["hash_b"], "template", "v", "", "p", 0, 0), now)
+
+    cfg = Config(in_memory=True, no_verify=True, anchor_chain="monero",
+                 port=17368, bind="127.0.0.1")
+    srv_store = PeerStore(cfg)
+    await srv_store.init()
+    srv = TranspeerServer(cfg, srv_store, "budget_srv", time.time(), network_names=["monero"],
+                          blobdb=srv_db, anchor_store=srv_anchor, share_stores={venue: srv_shares})
+    runner = web.AppRunner(srv.create_app())
+    await runner.setup()
+    await web.TCPSite(runner, "127.0.0.1", 17368).start()
+
+    r_store = None
+    saved = reader_mod.MAX_BLOCK_FETCHES
+    reader_mod.MAX_BLOCK_FETCHES = 4
+    try:
+        rcfg = Config(in_memory=True, no_verify=True, anchor_chain="monero",
+                      anchor_checkpoint=f"5:{checkpoint.hash.hex()}", anchor_venues="mini",
+                      anchor_window_days=9 * 120 / 86400, port=17362, bind="127.0.0.1")
+        r_store = PeerStore(rcfg)
+        await r_store.init()
+        reader = Reader(rcfg, r_store, BlobDB(), AnchorStore(None), {}, AnchorClient(rcfg),
+                        pow, clock=lambda: now)
+        got = []
+        for _ in range(3):
+            st = await asyncio.wait_for(reader.sync([("127.0.0.1", 17368)]), timeout=30)
+            got.append(st.fetched_blocks)
+        check(got == [4, 8, 10], f"the budget paces the window over syncs: {got}")
+        check(reader.state.bootstrapped, "the third sync has the whole window and bootstraps")
+    finally:
+        reader_mod.MAX_BLOCK_FETCHES = saved
+        await runner.cleanup()
+        await srv_store.close()
+        if r_store is not None:
+            await r_store.close()
 
 
 async def test_reader_hostile_fork():
@@ -1300,7 +1708,12 @@ if __name__ == "__main__":
     test_stores()
     asyncio.run(test_endpoints_and_client())
     asyncio.run(test_reader())
+    asyncio.run(test_reader_resync())
     asyncio.run(test_reader_hostile_headers())
+    asyncio.run(test_reader_hostile_tip_and_types())
+    asyncio.run(test_reader_withheld_coinbases())
+    asyncio.run(test_reader_discovered_venue())
+    asyncio.run(test_reader_fetch_budget())
     asyncio.run(test_reader_hostile_fork())
     asyncio.run(test_store_tags_ranking())
     asyncio.run(test_query_batch_bucketed_anchor_read())

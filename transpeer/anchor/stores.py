@@ -43,8 +43,16 @@ class AnchorStore:
         return max(self.headers)
 
     def prune(self, keep_from_height: int) -> None:
+        self.prune_headers(keep_from_height)
+        self.prune_blocks(keep_from_height)
+
+    def prune_headers(self, keep_from_height: int) -> None:
         for h in [h for h in self.headers if h < keep_from_height]:
             del self.headers[h]
+
+    def prune_blocks(self, keep_from_height: int) -> None:
+        """Block blobs are only needed for the coverage window; headers
+        are kept much further back (the checkpoint lookback)."""
         for h in [h for h in self.blocks if h < keep_from_height]:
             del self.blocks[h]
 

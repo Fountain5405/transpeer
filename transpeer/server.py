@@ -319,6 +319,15 @@ class TranspeerServer:
             return web.json_response({"error": "unknown block"}, status=404)
         return web.Response(body=blob, content_type="application/octet-stream")
 
+    async def handle_venues(self, request: web.Request) -> web.Response:
+        """The venues this node serves shares for, so that a reader can
+        resolve a tag for a venue it was not configured with (spec §6.4)."""
+        if self.anchor_store is None:
+            return web.json_response({"error": "anchor not configured"}, status=404)
+        if not self._check_rate_limit(request.remote):
+            return web.json_response({"error": "rate limited"}, status=429)
+        return web.json_response({"venues": [v.hex() for v in self.share_stores]})
+
     def _venue_store(self, request: web.Request):
         """Resolve {id} as 64 hex chars to a ShareStore, or a (400/404)
         Response if the id is malformed or the venue isn't served."""
@@ -393,6 +402,7 @@ class TranspeerServer:
         app.router.add_get("/blobs/index", self.handle_blobs_index)
         app.router.add_get("/anchor/{chain}/headers", self.handle_anchor_headers)
         app.router.add_get("/anchor/{chain}/coinbase/{height}", self.handle_anchor_coinbase)
+        app.router.add_get("/venues", self.handle_venues)
         app.router.add_get("/venue/{id}/share/{share_id}", self.handle_venue_share)
         app.router.add_get("/venue/{id}/shares", self.handle_venue_shares)
         app.router.add_get("/venue/{id}/share_by_root/{root}", self.handle_venue_share_by_root)
