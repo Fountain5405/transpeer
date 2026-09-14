@@ -1147,6 +1147,77 @@ async def test_p2p_peer_list_edge_cases():
         await double2.stop()
 
 
+async def test_monerod_source():
+    print("monerod source")
+    from aiohttp import web
+    from transpeer.anchor.monero import block_id
+    from transpeer.anchor.monerod import MonerodSource
+    from transpeer.anchor.powhash import Sha256Pow
+
+    pow = Sha256Pow()
+    world = build_world(pow)
+    rows, blocks = world["rows"], world["blocks"]
+    state = {"bad_height": None}
+
+    async def handle(request):
+        req = await request.json()
+        method = req.get("method")
+        params = req.get("params") or {}
+        rid = req.get("id", "0")
+        if method == "get_block_count":
+            result = {"count": len(rows)}
+        elif method == "get_block":
+            h = int(params["height"])
+            result = {"blob": blocks[h].hex(),
+                      "block_header": {"hash": block_id(rows[h].blob).hex()}}
+        elif method == "get_block_headers_range":
+            start = int(params["start_height"])
+            end = int(params["end_height"])
+            headers = []
+            for h in range(start, end + 1):
+                row = rows[h]
+                hash_hex = block_id(row.blob).hex()
+                if h == state["bad_height"]:
+                    hash_hex = "00" * 32
+                headers.append({
+                    "height": h,
+                    "difficulty": row.difficulty,
+                    "wide_difficulty": hex(row.difficulty),
+                    "cumulative_difficulty": row.difficulty * (h + 1),
+                    "timestamp": 1_700_000_000 + 120 * h,
+                    "hash": hash_hex,
+                    "prev_hash": block_id(rows[h - 1].blob).hex() if h > 0 else bytes(32).hex(),
+                })
+            result = {"headers": headers}
+        else:
+            return web.json_response({"jsonrpc": "2.0", "id": rid,
+                                      "error": {"code": -32601, "message": "method not found"}})
+        return web.json_response({"jsonrpc": "2.0", "id": rid, "result": result})
+
+    app = web.Application()
+    app.router.add_post("/json_rpc", handle)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 17358)
+    await site.start()
+    try:
+        source = MonerodSource("http://127.0.0.1:17358")
+        h = await source.height()
+        check(h == 39, "height is tip = count - 1")
+        got = await source.header_rows(0, 39)
+        check(got == rows, "header_rows(0,39) equals the world's rows")
+
+        state["bad_height"] = 10
+        raised = False
+        try:
+            await source.header_rows(0, 39)
+        except ValueError:
+            raised = True
+        check(raised, "a wrong hash in the range reply raises ValueError")
+    finally:
+        await runner.cleanup()
+
+
 if __name__ == "__main__":
     test_index_cursor()
     test_monero_hashing()
@@ -1164,5 +1235,6 @@ if __name__ == "__main__":
     asyncio.run(test_challenges())
     asyncio.run(test_p2p_observer())
     asyncio.run(test_p2p_peer_list_edge_cases())
+    asyncio.run(test_monerod_source())
     print(f"\n{passed} passed, {failed} failed")
     sys.exit(1 if failed else 0)

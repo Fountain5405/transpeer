@@ -6,6 +6,7 @@ import logging
 import os
 import time
 
+import aiohttp
 from aiohttp import web
 
 from .client import TranspeerClient
@@ -202,6 +203,8 @@ class Node:
                 self._reader_loop(),
                 *([self._challenge_loop()] if self.reader is not None else []),
                 *([self._observe_loop()] if self._observe_entries else []),
+                *([self._anchor_source_loop()]
+                  if self.config.anchor_monerod and self.reader is not None else []),
             )
         finally:
             await self.store.close()
@@ -426,6 +429,60 @@ class Node:
             except Exception:  # noqa: BLE001
                 log.exception("reader loop")
             await asyncio.sleep(60)
+
+    async def _anchor_source_loop(self):
+        """Fill the anchor store from monerod's JSON-RPC (--anchor-monerod,
+        spec §17): every 120 s, first run immediately. Fetches only the
+        heights the store lacks, verifies the merged range with the
+        node's PoW backend, and on success replaces the store's view;
+        a failing verification logs and discards the newly fetched rows."""
+        from .anchor.headers import DIFFICULTY_BLOCKS_COUNT, HeaderError, parse_checkpoint, verify_headers
+        from .anchor.monerod import MonerodSource
+        from .anchor.reader import coverage_from
+
+        source = MonerodSource(self.config.anchor_monerod)
+        checkpoint = parse_checkpoint(self.config.anchor_checkpoint)
+        page = 100
+        while True:
+            try:
+                tip = await source.height()
+                start = max(0, checkpoint.height - DIFFICULTY_BLOCKS_COUNT)
+                store_tip = self._anchor_store.tip_height()
+                if self._anchor_store.view is not None and store_tip is not None:
+                    fetch_from = max(start, store_tip + 1)
+                else:
+                    fetch_from = start
+                new_rows = []
+                cur = fetch_from
+                while cur <= tip:
+                    end = min(cur + page - 1, tip)
+                    new_rows.extend(await source.header_rows(cur, end))
+                    cur = end + 1
+                if new_rows:
+                    existing = (
+                        self._anchor_store.header_rows(start, fetch_from - start)
+                        if fetch_from > start else []
+                    )
+                    merged = existing + new_rows
+                    try:
+                        view = verify_headers(merged, checkpoint, self._observe_pow, time.time())
+                    except HeaderError as e:
+                        log.warning("anchor source: header verification failed: %s", e)
+                    else:
+                        self._anchor_store.put_headers(new_rows)
+                        self._anchor_store.view = view
+                view = self._anchor_store.view
+                if view is not None:
+                    window_from = coverage_from(view, self.config.anchor_window_days)
+                    for h in range(window_from, view.tip_height + 1):
+                        if self._anchor_store.block(h) is None:
+                            blob = await source.block_blob(h)
+                            self._anchor_store.put_block(h, blob)
+                if not self.config.in_memory:
+                    self._anchor_store.save()
+            except (ValueError, aiohttp.ClientError, asyncio.TimeoutError, OSError):
+                log.exception("anchor source loop")
+            await asyncio.sleep(120)
 
     async def _challenge_loop(self):
         """Faithfulness challenges (spec §9): run a round every hour.

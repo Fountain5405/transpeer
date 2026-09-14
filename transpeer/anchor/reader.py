@@ -30,6 +30,14 @@ SHARE_PAGE = 64
 TOP_N_PUBLISH = 64
 
 
+def coverage_from(view, anchor_window_days: float) -> int:
+    """First height of the coverage window: anchor_window_days back from
+    the tip, in expected Monero blocks, clamped to the view's start.
+    Shared with node.py's _anchor_source_loop."""
+    span = int(anchor_window_days * 86400 / MONERO_BLOCK_TIME)
+    return max(view.tip_height - span, view.first)
+
+
 def venues_from_config(config) -> dict:
     """consensus id -> name, from --anchor-venues (empty means main,
     mini, nano); names resolve through share.VENUES, 64-hex strings are
@@ -187,8 +195,7 @@ class Reader:
         """Coverage window: fetch and verify coinbases, keep the
         merge-mining tag per tagged block."""
         chain = self.config.anchor_chain
-        span = int(self.config.anchor_window_days * 86400 / MONERO_BLOCK_TIME)
-        window_from = max(view.tip_height - span, view.first)
+        window_from = coverage_from(view, self.config.anchor_window_days)
         tagged = {}
         for height in range(window_from, view.tip_height + 1):
             blob = self.anchor.block(height)
