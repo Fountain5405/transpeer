@@ -765,3 +765,134 @@ Merkle algorithm transcribed from `src/merkle.cpp`; P2Pool's own
 Python merge-mining stub, `tests/src/mm_server.py`, fixed the JSON
 shapes. A live tagged Monero block is the remaining cross-check and
 belongs to slice 3, where the coinbase fetch exists.
+
+### 17.1 Slice 3 decisions
+
+Decided on 2026-09-14 when the reader build started, after reading
+P2Pool v4.18 `pool_block_parser.inl`, `pool_block.cpp`,
+`side_chain.cpp`, `p2p_server.cpp`, `merkle.cpp` and Monero v0.18.4.1
+`difficulty.cpp`, `tree-hash.c`, `cryptonote_format_utils.cpp`. As
+above, these are engineering choices; where one narrows the protocol
+text it says so.
+
+**Anchor data on the wire.** `/anchor/{chain}/headers?from=H&count=N`
+returns, per block, the *hashing blob* (header, transaction tree root,
+transaction count: what the proof-of-work is computed over and what the
+block id is the hash of) and the difficulty the serving node's monerod
+reports. `/anchor/{chain}/coinbase/{height}` returns the block blob as
+monerod serves it: header, miner transaction and the list of
+transaction hashes. This *is* the "coinbase and its Merkle path" of §5:
+the verifier hashes the miner transaction (Monero's three-part hash,
+with the second part the Keccak of a single zero byte and the third
+part zero), builds the transaction tree hash over the coinbase hash
+followed by the listed hashes (Monero `tree_hash`, which P2Pool's
+`merkle_hash` reproduces) and compares with the root in the hashing
+blob. `count` is capped at 720 per request. All three §5 anchor and
+venue endpoints stay free of handshake proof-of-work and under the
+rate limit.
+
+**Checkpoint and difficulty.** A checkpoint is `height:hash`. Headers
+are fetched from `checkpoint - 735` (Monero's difficulty window plus
+lag) so that every block after the checkpoint has a full window.
+Blocks at or before the checkpoint are authenticated by linkage to the
+checkpoint hash and their difficulties are taken as served; blocks
+after it get their difficulty recomputed by Monero's `next_difficulty`
+(window 720, lag 15, cut 60, target 120 s) and checked against the
+served value. A server lying about pre-checkpoint difficulties can only
+lower the post-checkpoint difficulty it then has to mine at, and its
+chain loses the cumulative-work comparison to any honest source; the
+newcomer is only fooled when every source it reaches lies, which is
+the eclipse the anchor cannot address. Ship a fresh checkpoint with
+each release. The 30-minute stale-tip rule and the sampling rule of
+§6.2 are implemented as written; the sample is drawn with the
+process's own randomness.
+
+**Proof-of-work backend.** Verification takes a hasher
+`pow_hash(blob, height, seed_hash) -> 32 bytes`. The production
+backend looks for a RandomX binding at start-up and refuses to run the
+reader without one; the simulation backend (`--anchor-sim-pow`) is
+SHA-256 of the blob. Difficulty is checked as Monero does: the hash
+read as a little-endian 256-bit integer times the difficulty must not
+overflow 256 bits.
+
+**Shares.** The reader parses P2Pool's full (non-compact, non-pruned)
+share serialisation from `pool_block_parser.inl` and checks, in
+order: syntax; the share id, which is Keccak over the main-chain data
+with the nonce, extra nonce and Merkle root zeroed, the side-chain
+data, and the venue's consensus id; the proof-of-work over the
+main-chain hashing blob against the share's own `m_difficulty`; the
+share's Merkle proof of its id at its aux slot against the Merkle root
+in its coinbase tag; and, for a share that names the transpeer chain
+id in its merge-mining extra map, that the entry decodes as a 32-byte
+aux hash followed by two varints of difficulty. Not checked: the
+miner's transaction keys and payouts, and the sidechain difficulty
+rule. These are the venue's consensus, which the canonical-fork rule of
+§6.5 delegates to the venue: a share only carries weight when it is an
+ancestor of a share P2Pool itself put into a Monero block, and P2Pool
+does not build on shares that fail its rules. Compact and pruned share
+encodings are rejected; serving nodes MUST serve full shares.
+
+**Venue endpoints.** `{id}` is the venue's consensus id, hex. Three
+lookups: `/venue/{id}/share/{share_id}` for one share, `/venue/{id}/
+shares?from={share_id}&count={n}` walking parents from `from` (`n`
+capped at 64 per request), and `/venue/{id}/share_by_root/{root}` for
+the share whose coinbase Merkle root equals a tag's root, which is how
+a tagged anchor block's venue leaf is resolved (P2Pool's own
+`find_block_by_merkle_root`). The share store keeps raw bytes on disk
+under `data_dir/venues/{id}/` and an in-memory index of the parsed
+header fields, pruned at four windows of age, like P2Pool.
+
+**Built-in venues.** The consensus ids of P2Pool main, mini and nano
+are copied from `side_chain.cpp`; `--anchor-venues` adds or replaces
+them. A venue discovered from a tag but not configured is resolved
+only if some transpeer serves its shares.
+
+**Gossip.** Each query cycle, after `/transpeers`, the node asks the
+queried transpeer for `/blobs/index` since the cursor it holds for
+that transpeer, fetches blobs it lacks, and verifies each commitment
+before storing: `share` records by fetching and verifying the share
+from the same transpeer, `block` records by the coinbase of the named
+height and the proof; `template` records are dropped, they carry no
+weight and are the publisher's own. The `/blobs/index` cursor is made
+inclusive with a `(first_seen, hash)` pair so that rows sharing a
+timestamp across a page boundary are not skipped; the response carries
+`next_since` and `next_hash`.
+
+**Store tags and ranking.** `TranspeerEntry` gains `published` (set
+when the reader seeds or re-seeds the store from weights) and
+`unfaithful` (§9). Under `--anchor-read`, the hand-off ranking key
+counts vouchers from published reporters before other vouchers, the
+reserve pass takes published clusters first, and unfaithful transpeers
+sort last for queries and gossip and are the first eviction
+candidates. With the flag off the keys are unchanged.
+
+**Scan-stop.** Under `--anchor-read` the scanner's idle condition is
+the reader's `bootstrapped` state (§8); without the flag it is the live
+count, as before.
+
+**Observer client.** A minimal P2Pool P2P client transcribed from
+`p2p_server.cpp`: challenge, solution with the 10000-difficulty rule,
+listen port, then `PEER_LIST_REQUEST` and `BLOCK_REQUEST` by share id
+(the zero id asks for the tip). It exists so that a transpeer with no
+P2Pool node of its own can still fill its share store from the venue's
+overlay; it is tested against a Python double that speaks the same
+bytes and, like the merge-mining poller, is unverified against a real
+P2Pool until the testnet check.
+
+**Serving from the operator's daemons.** `--anchor-monerod URL` makes
+the node fill its anchor store from monerod's JSON-RPC
+(`get_block_headers_range`, `get_block`); `--anchor-observe
+HOST:PORT,...` makes it fill share stores through the observer client.
+Both are unverified against real daemons until the testnet check. A
+node with neither relays what it verified from other transpeers.
+
+**Flags.** `--anchor-read` (default off; needs a checkpoint and a
+proof-of-work backend), `--anchor-checkpoint HEIGHT:HASH`,
+`--anchor-sim-pow`, `--anchor-venues ID,...`, `--anchor-monerod URL`,
+`--anchor-observe HOST:PORT,...`, `--anchor-window-days` (default 7).
+The reader runs as one more node loop, syncing every 60 s.
+
+**Faithfulness challenges** are implemented as §9 states, in their own
+node loop, with the sample drawn from commitments the reader itself
+verified; a transpeer's `uptime` from `/transpeer` gates the
+10-minute exemption.
