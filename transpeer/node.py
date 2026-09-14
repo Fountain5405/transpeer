@@ -44,6 +44,7 @@ class Node:
         self.publisher = None
         self.auxrpc = None
         self._anchor_saved = (0, 0)
+        self._chain_saved = None
         # Chain-anchored reading (--anchor-read); built in run().
         self.reader = None
         self.anchor_client = None
@@ -99,7 +100,7 @@ class Node:
         if self.config.anchor_read:
             from .anchor.fetch import AnchorClient
             from .anchor.powhash import PowUnavailable, backend_for
-            from .anchor.reader import Reader, venues_from_config
+            from .anchor.reader import CLIENT_TIMEOUT, Reader, venues_from_config
             from .anchor.stores import AnchorStore, ShareStore, venue_dir
             if self.blobdb is None:
                 anchor_blobs_path = self.config.data_dir / "anchor_blobs.json"
@@ -120,7 +121,7 @@ class Node:
                 )
                 store.load()
                 self._share_stores[venue] = store
-            self.anchor_client = AnchorClient(self.config)
+            self.anchor_client = AnchorClient(self.config, timeout=CLIENT_TIMEOUT)
             try:
                 pow_backend = backend_for(self.config)
             except PowUnavailable as e:
@@ -423,12 +424,22 @@ class Node:
             try:
                 await self.reader.sync(self._reader_sources())
                 if not self.config.in_memory:
-                    self._anchor_store.save()
-                    if self.publisher is None:
-                        self.blobdb.save(self._anchor_path)
+                    self._save_anchor_state()
             except Exception:  # noqa: BLE001
                 log.exception("reader loop")
             await asyncio.sleep(60)
+
+    def _save_anchor_state(self) -> None:
+        """Write the chain and blob stores only when something changed:
+        both loops run every minute or two and rewrite whole files."""
+        state = (self._anchor_store.tip_height(), self.blobdb.blob_count(),
+                 self.blobdb.commitment_count())
+        if state == self._chain_saved:
+            return
+        self._anchor_store.save()
+        if self.publisher is None:
+            self.blobdb.save(self._anchor_path)
+        self._chain_saved = state
 
     async def _anchor_source_loop(self):
         """Fill the anchor store from monerod's JSON-RPC (--anchor-monerod,
@@ -479,7 +490,7 @@ class Node:
                             blob = await source.block_blob(h)
                             self._anchor_store.put_block(h, blob)
                 if not self.config.in_memory:
-                    self._anchor_store.save()
+                    self._save_anchor_state()
             except (ValueError, aiohttp.ClientError, asyncio.TimeoutError, OSError):
                 log.exception("anchor source loop")
             await asyncio.sleep(120)
