@@ -165,7 +165,7 @@ def test_share_codec():
     print("share codec")
     from transpeer.anchor import CHAIN_ID
     from transpeer.anchor.share import (build_share, parse_share, verify_share_pow, mine_share, ShareError,
-                                        transpeer_aux, VENUES, MAX_BLOCK_SIZE)
+                                        transpeer_aux, VENUES, MAX_BLOCK_SIZE, MAX_OUTPUT_VALUE)
     from transpeer.anchor.merkle import verify_merkle_proof, aux_slot, parse_tx_extra_mm_tag
     from transpeer.anchor.powhash import Sha256Pow
     pow = Sha256Pow()
@@ -199,6 +199,13 @@ def test_share_codec():
     s2 = parse_share(raw2, venue)
     check(s2.parent == s.id and transpeer_aux(s2) is None and s2.n_aux_chains == 1, "child share, venue only")
     check(s2.merkle_proof == () and s2.merkle_root == s2.id, "single leaf: root is the share id")
+    # 300 outputs at MAX_OUTPUT_VALUE each sum past 2**64: P2Pool's uint64 total_reward
+    # wraps and rejects this; parse_share must reject it too, not silently accept it.
+    raw3 = build_share(**dict(kw, outputs=[(MAX_OUTPUT_VALUE, bytes(32), 0)] * 300))
+    try:
+        parse_share(raw3, venue); check(False, "uint64 reward overflow rejected")
+    except ShareError:
+        check(True, "uint64 reward overflow rejected")
 
 
 if __name__ == "__main__":

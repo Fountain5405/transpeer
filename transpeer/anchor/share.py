@@ -238,6 +238,8 @@ def parse_share(data: bytes, consensus_id: bytes) -> ParsedShare:
         reward = r.varint()
         if reward > MAX_OUTPUT_VALUE:
             raise ShareError("output reward too large")
+        if total_reward + reward >= (1 << 64):
+            raise ShareError("total reward overflows uint64")
         total_reward += reward
         r.expect(TXOUT_TO_TAGGED_KEY, "tagged key output")
         eph_pub = r.buf(HASH_SIZE)
