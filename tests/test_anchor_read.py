@@ -161,10 +161,51 @@ def test_headers():
     check(best_view([v, v2]) is v2, "best_view picks the most work")
 
 
+def test_share_codec():
+    print("share codec")
+    from transpeer.anchor import CHAIN_ID
+    from transpeer.anchor.share import (build_share, parse_share, verify_share_pow, mine_share, ShareError,
+                                        transpeer_aux, VENUES, MAX_BLOCK_SIZE)
+    from transpeer.anchor.merkle import verify_merkle_proof, aux_slot, parse_tx_extra_mm_tag
+    from transpeer.anchor.powhash import Sha256Pow
+    pow = Sha256Pow()
+    venue = VENUES["mini"]
+    blob_hash = hashlib.sha256(b"blob").digest()
+    kw = dict(consensus_id=venue, txin_gen_height=3000000, prev_id=bytes(32), timestamp=1_700_000_000,
+              parent=bytes(32), height=0, difficulty=300, cumulative_difficulty=300,
+              aux={CHAIN_ID: (blob_hash, 100000)})
+    raw = mine_share(kw, pow)
+    s = parse_share(raw, venue)
+    check(s.height == 0 and s.difficulty == 300 and s.parent == bytes(32), "sidechain fields")
+    check(transpeer_aux(s) == blob_hash and s.aux[CHAIN_ID][1] == 100000, "aux map carries our blob hash and difficulty")
+    check(s.n_aux_chains == 2, "two aux chains: venue and transpeer")
+    check(verify_share_pow(s, pow), "share PoW meets its difficulty")
+    check(len(raw) < MAX_BLOCK_SIZE, "size bound")
+    try:
+        parse_share(raw, VENUES["main"]); check(False, "wrong consensus id rejected")
+    except ShareError:
+        check(True, "wrong consensus id changes the share id and fails the aux proof")
+    try:
+        parse_share(raw[:-1], venue); check(False, "truncated share rejected")
+    except ShareError:
+        check(True, "truncated share rejected")
+    tampered = bytearray(raw); tampered[-1] ^= 1
+    try:
+        parse_share(bytes(tampered), venue); check(False, "tampered extra buf rejected")
+    except ShareError:
+        check(True, "tampered bytes change the share id and fail the aux proof")
+    # A share on top of it, with two uncles sorted, and no transpeer aux
+    raw2 = mine_share(dict(kw, parent=s.id, height=1, cumulative_difficulty=600, aux={}), pow)
+    s2 = parse_share(raw2, venue)
+    check(s2.parent == s.id and transpeer_aux(s2) is None and s2.n_aux_chains == 1, "child share, venue only")
+    check(s2.merkle_proof == () and s2.merkle_root == s2.id, "single leaf: root is the share id")
+
+
 if __name__ == "__main__":
     test_index_cursor()
     test_monero_hashing()
     test_pow_backends()
     test_headers()
+    test_share_codec()
     print(f"\n{passed} passed, {failed} failed")
     sys.exit(1 if failed else 0)
