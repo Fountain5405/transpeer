@@ -75,8 +75,9 @@ class Node:
                     _accept_and_close, self.config.bind, net.default_port)
                 self._sim_listeners.append(srv)
                 log.info("Sim daemon listener for %s on port %d", name, net.default_port)
-        if self.config.anchor_publish:
+        if self.config.anchor_publish or self.config.anchor_read:
             from .anchor.blobdb import BlobDB
+        if self.config.anchor_publish:
             from .anchor.publisher import Publisher
             from .anchor.auxrpc import AuxRpcServer
             self._anchor_path = self.config.data_dir / "anchor_blobs.json"
@@ -88,7 +89,6 @@ class Node:
                      self.config.aux_rpc_port, self.config.aux_diff)
 
         if self.config.anchor_read:
-            from .anchor.blobdb import BlobDB
             from .anchor.fetch import AnchorClient
             from .anchor.powhash import PowUnavailable, backend_for
             from .anchor.reader import Reader, venues_from_config
