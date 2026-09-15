@@ -80,3 +80,16 @@ Invariants and traps that have already cost time. Session status lives in
 - After every experiment, update `docs/manuscript.md`: result table with
   its results file, claims ledger (measured / extrapolated / hypothesis),
   Appendix A for any corrected conclusion, and the commit table.
+
+## Tests
+
+- A test that starts a `Node` must pass `scan_rate=0.0` (or `--no-scan`):
+  with the default rate the scanner fires real probes at random public
+  addresses from inside the test suite, as detached tasks that outlive
+  the test. A review caught one such test before it landed.
+- Test suites bind loopback ports: `tests/test_anchor_publish.py`
+  17337–17343, `tests/test_anchor_read.py` 17350–17369. Two concurrent
+  runs of the same suite collide; new suites take a fresh range.
+- Test fixtures use public-looking addresses (20.x, 203.0.113.x). The
+  blob codec rejects reserved ranges (10.x, 127.x), so a 10.x fixture
+  fails with `BlobError`, not the assertion under test.
