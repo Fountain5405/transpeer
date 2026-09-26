@@ -10,6 +10,7 @@ import aiohttp
 
 from .config import Config, HANDSHAKE_MAX_EFFORT, PROTOCOL_VERSION, TRANSPEER_PORT, user_agent
 from .peerstore import Peer, PeerStore, TranspeerEntry
+from .ipranges import is_reserved_address
 from .pow import (
     verify as pow_verify, verify_simulated as pow_verify_sim,
     solve_handshake, HANDSHAKE_BUCKET_SECS,
@@ -110,9 +111,16 @@ class TranspeerClient:
         simulated = self.config.sim_pow
         # If we have no hint, we can't solve a binding PoW. The caller must
         # get the hint from a 402 response first (server includes it).
-        nonce, solution, bucket = solve_handshake(
-            client_ip_hint, node_id, effort, simulated=simulated,
-        )
+        if simulated:
+            # The simulated solve is a blocking sleep by design: Shadow
+            # charges it to the node, which is the measured behaviour.
+            nonce, solution, bucket = solve_handshake(
+                client_ip_hint, node_id, effort, simulated=True,
+            )
+        else:
+            nonce, solution, bucket = await asyncio.to_thread(
+                solve_handshake, client_ip_hint, node_id, effort,
+            )
         return f"{bucket}:{base64.b64encode(nonce).decode()}:{base64.b64encode(solution).decode()}"
 
     async def _get_with_pow(self, session: aiohttp.ClientSession, url: str,
@@ -223,7 +231,18 @@ class TranspeerClient:
                     if not _valid_endpoint(peer.addr, peer.port):
                         continue
                     peer.last_seen = _clamp_time(peer.last_seen, now)
-                    if not self.config.no_pow and peer.nonce and peer.solution:
+                    if not self.config.no_pow:
+                        # Spec §3.4: every entry carries a proof, and the
+                        # cost is the receiver's difficulty, not whatever
+                        # effort the sender wrote into the entry.
+                        if not (peer.nonce and peer.solution):
+                            log.debug("No PoW on %s:%d for %s", peer.addr, peer.port, network)
+                            continue
+                        if (isinstance(peer.effort, bool) or not isinstance(peer.effort, int)
+                                or peer.effort < self.config.difficulty):
+                            log.debug("PoW effort %r below local difficulty %d for %s:%d on %s",
+                                      peer.effort, self.config.difficulty, peer.addr, peer.port, network)
+                            continue
                         vfn = pow_verify_sim if self.config.sim_pow else pow_verify
                         if not vfn(
                             network, peer.addr, peer.port,
@@ -286,6 +305,11 @@ class TranspeerClient:
             if port is None or network in stored.native:
                 continue
             ok = False
+            if is_reserved_address(entry.addr):
+                # Same rule as the verifier: never probe private or
+                # loopback space on another transpeer's word.
+                self.store.set_native(entry.addr, entry.port, network, False)
+                continue
             try:
                 _, writer = await asyncio.wait_for(
                     asyncio.open_connection(entry.addr, port), timeout=5)

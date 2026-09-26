@@ -246,8 +246,10 @@ class Node:
                                 name, info.addr, info.port, self.config.difficulty,
                             )
                         else:
-                            nonce, solution, bucket = pow_solve(
-                                name, info.addr, info.port, self.config.difficulty,
+                            # A real solve is seconds of CPU; keep the
+                            # event loop (and the HTTP server) responsive.
+                            nonce, solution, bucket = await asyncio.to_thread(
+                                pow_solve, name, info.addr, info.port, self.config.difficulty,
                             )
                         self._local_proofs[cache_key] = (nonce, solution, bucket)
                         peer = Peer(

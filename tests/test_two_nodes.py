@@ -33,7 +33,9 @@ def cleanup():
 
 async def start_node(name, port, data_dir, networks):
     """Start a transpeer server and return its components."""
-    config = Config(port=port, bind="127.0.0.1", data_dir=data_dir, networks=networks)
+    # Proofs in this suite are solved at effort 1 to keep it fast; the
+    # receiver drops entries below its own --difficulty, so declare 1.
+    config = Config(port=port, bind="127.0.0.1", data_dir=data_dir, networks=networks, difficulty=1)
     store = PeerStore(config)
     await store.init()
     node_id = f"test_{name}"
@@ -178,7 +180,7 @@ async def run_tests():
     store_b2_dir = Path("/tmp/transpeer_test_b2")
     if store_b2_dir.exists():
         shutil.rmtree(store_b2_dir)
-    cfg_b2 = Config(port=PORT_B, bind="127.0.0.1", data_dir=store_b2_dir, networks=["wownero"])
+    cfg_b2 = Config(port=PORT_B, bind="127.0.0.1", data_dir=store_b2_dir, networks=["wownero"], difficulty=1)
     store_b2 = PeerStore(cfg_b2)
     await store_b2.init()
     client_b2 = TranspeerClient(cfg_b2, store_b2)

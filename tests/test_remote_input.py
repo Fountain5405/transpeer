@@ -21,10 +21,14 @@ from transpeer.client import (  # noqa: E402
 from transpeer.config import (  # noqa: E402
     Config, HANDSHAKE_MAX_EFFORT, PROTOCOL_VERSION, RATE_LIMIT_REQUESTS,
 )
-from transpeer.peerstore import PeerStore, TranspeerEntry  # noqa: E402
-from transpeer.pow import HANDSHAKE_BUCKET_SECS, verify_handshake  # noqa: E402
+from transpeer.peerstore import Peer, PeerStore, TranspeerEntry  # noqa: E402
+from transpeer.pow import (  # noqa: E402
+    HANDSHAKE_BUCKET_SECS, _SIM_PROOF_MAGIC, _estimated_solve_time, verify_handshake,
+)
+from transpeer.ipranges import is_reserved_address  # noqa: E402
 from transpeer.scanner import random_ip_in_cidr  # noqa: E402
 from transpeer.server import TranspeerServer  # noqa: E402
+from transpeer.verifier import verify_peers  # noqa: E402
 
 PORT = 17380
 passed = failed = 0
@@ -68,6 +72,60 @@ def test_pow_guard():
         check(ok is False, f"solution of {len(bad)} bytes is rejected, not memmoved")
 
 
+def test_solve_time_model():
+    print("Simulated solve time")
+    ts = [_estimated_solve_time(e) for e in (1, 10, 50, 100, 500, 1000)]
+    check(all(a <= b for a, b in zip(ts, ts[1:])), "estimate is monotonic in effort")
+    check(abs(_estimated_solve_time(100) - 4.1) < 1e-9, "effort 100 still sleeps 4.1 s (every measured cell)")
+    check(_estimated_solve_time(0) == _estimated_solve_time(1), "floor applies below one solve")
+
+
+def test_reserved():
+    print("Reserved ranges")
+    check(all(is_reserved_address(a) for a in ("127.0.0.1", "10.1.1.1", "192.168.1.1", "169.254.169.254",
+                                                "100.64.0.1", "224.0.0.1", "0.0.0.0", "not-an-ip")),
+          "loopback, private, link-local, CGNAT, multicast and junk are reserved")
+    check(not is_reserved_address("11.0.0.1") and not is_reserved_address("20.1.2.3"),
+          "public addresses are not")
+
+
+async def test_verifier_skips_reserved():
+    print("Verifier")
+    store = PeerStore(Config(in_memory=True, scan_rate=0.0, no_pow=True))
+    now = int(time.time())
+    for addr in ("127.0.0.1", "169.254.169.254"):
+        await store.add_peer(Peer(network="monero", addr=addr, port=18080, last_seen=now), source_addr="20.1.1.1")
+    t0 = time.monotonic()
+    await verify_peers(store, "monero")
+    check(time.monotonic() - t0 < 1.0, "reserved targets are not probed (no connect timeout spent)")
+    check(store.get_peers("monero", verified_only=True) == [], "reserved-range peers never become verified")
+
+
+def test_gossip_sampling():
+    print("Gossip sampling")
+    store = PeerStore(Config(in_memory=True, scan_rate=0.0))
+    now = int(time.time())
+    for i in range(60):
+        e = TranspeerEntry(addr=f"20.0.{i // 256}.{i % 256}", port=7337, networks=["monero"],
+                           last_seen=now - i * 600)
+        store._transpeers[e.key] = e
+    for _ in range(20):
+        picked = store.get_transpeers_for_gossip(20)
+        keys = [t.key for t in picked]
+        if len(keys) != 20 or len(set(keys)) != 20:
+            check(False, "20 distinct transpeers per answer, no duplicates")
+            break
+    else:
+        check(True, "20 distinct transpeers per answer, no duplicates")
+    counts = {}
+    for _ in range(300):
+        for t in store.get_transpeers_for_gossip(20):
+            counts[t.key] = counts.get(t.key, 0) + 1
+    newest = sum(counts.get(f"20.0.0.{i}:7337", 0) for i in range(10))
+    oldest = sum(counts.get(f"20.0.0.{i}:7337", 0) for i in range(50, 60))
+    check(newest > oldest, "recent transpeers are still favoured")
+
+
 def test_scanner_edge():
     print("Scanner CIDR edge")
     check(random_ip_in_cidr("20.1.2.3/32") == "20.1.2.3", "/32 yields the address itself, not the next one")
@@ -109,6 +167,11 @@ async def test_gossip_uptime():
     check(store.get_transpeer("20.1.1.1", 7337).uptime == 6000, "a direct probe still updates uptime")
 
 
+def b64(b: bytes) -> str:
+    import base64
+    return base64.b64encode(b).decode()
+
+
 class Hostile:
     """A server whose answers are well-formed JSON but not the protocol."""
 
@@ -128,6 +191,25 @@ class Hostile:
                                      status=402)
         if net == "notobject":
             return web.json_response([1, 2, 3])
+        if net == "pow":
+            # Hand-built simulated proofs: verify_simulated accepts any
+            # nonce with the SIMPOW tag, and solve_simulated would sleep
+            # for the estimated solve time.
+            nonce, sol = _SIM_PROOF_MAGIC + b"\x00" * 10, b"\x01" * 16
+            bucket = int(time.time()) // 21600
+            good = []
+            for i, effort in enumerate((100, 500)):
+                good.append({"addr": f"20.9.9.{i}", "port": 18080, "last_seen": 1, "proof": {
+                    "nonce": b64(nonce), "solution": b64(sol), "effort": effort,
+                    "timestamp_bucket": bucket}})
+            weak = {"addr": "20.9.9.8", "port": 18080, "proof": {
+                "nonce": b64(nonce), "solution": b64(sol), "effort": 0, "timestamp_bucket": bucket}}
+            return web.json_response({"peers": good + [
+                {"addr": "20.9.9.7", "port": 18080},   # no proof at all
+                weak,                                   # proof with effort 0
+                {"addr": "20.9.9.6", "port": 18080, "proof": {
+                    "nonce": b64(nonce), "solution": b64(sol), "effort": "100", "timestamp_bucket": bucket}},
+            ]})
         if net == "mixed":
             return web.json_response({"peers": [
                 {},                                        # missing addr/port
@@ -185,6 +267,19 @@ async def test_hostile_server():
               "bad entries are skipped individually; valid ones survive")
         check(all(g[2] <= now + 5 for g in got), "peer last_seen is clamped to now")
 
+        # Entry proof-of-work: required, and at the receiver's difficulty.
+        pow_cfg = Config(in_memory=True, scan_rate=0.0, sim_pow=True, difficulty=100)
+        pow_client = TranspeerClient(pow_cfg, PeerStore(pow_cfg))
+        got = sorted(p.addr for p in await pow_client.fetch_peers("127.0.0.1", PORT, "pow"))
+        check(got == ["20.9.9.0", "20.9.9.1"],
+              "entries without a proof, with effort 0, or a non-int effort are rejected; >= difficulty kept")
+        lax = Config(in_memory=True, scan_rate=0.0, sim_pow=True, difficulty=500)
+        got = sorted(p.addr for p in await TranspeerClient(lax, PeerStore(lax)).fetch_peers("127.0.0.1", PORT, "pow"))
+        check(got == ["20.9.9.1"], "an entry at effort 100 is rejected by a node requiring 500")
+        got = await client.fetch_peers("127.0.0.1", PORT, "pow")
+        check(len(got) == 5, "--no-pow accepts every well-formed entry")
+
+        now = int(time.time())
         tps = await client.fetch_transpeers("127.0.0.1", PORT)
         addrs = sorted(t.addr for t in tps)
         check(addrs == ["20.6.6.6", "20.7.7.7"], "junk, addr-less and 'ip:port' items are dropped")
@@ -207,6 +302,10 @@ async def test_hostile_server():
 async def main():
     test_helpers()
     test_pow_guard()
+    test_solve_time_model()
+    test_reserved()
+    await test_verifier_skips_reserved()
+    test_gossip_sampling()
     test_scanner_edge()
     test_rate_limit_table()
     await test_gossip_uptime()

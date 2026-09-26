@@ -70,6 +70,23 @@ Invariants and traps that have already cost time. Session status lives in
 - The peer-extraction loop caches each local peer's EquiX proof per
   6-hour timestamp bucket. Re-solving per cycle costs one solve per peer
   per minute in production and, in simulation, blocks the node in a sleep.
+  Production solves (entry and handshake) run in a worker thread; the
+  simulated solve is a blocking `time.sleep` on purpose, because Shadow
+  charges it to the node and every measurement was taken that way.
+- Since 2026-09-26 a received peer entry must carry a proof at an
+  `effort` of at least the local `--difficulty`, or it is dropped
+  (`--no-pow` disables the check). Every simulation runs honest and
+  attacker nodes at the same difficulty, so no measured cell changed.
+- The simulated solve time is linear: 4.1 s per 100 effort, floor 0.2 s.
+  It replaced a non-monotonic five-point table on 2026-09-26; only the
+  effort-100 point, which is unchanged, was used by the eclipse
+  experiments. The handshake PoW experiment (§8.2) interpolated across
+  the old table and is not reproducible bit for bit from the new code.
+- Addresses named by other transpeers are never probed if they fall in
+  a reserved range (`transpeer/ipranges.py`): the verifier marks such
+  peers dead and the native probe records them as closed. Test fixtures
+  that must pass verification use public-looking addresses outside
+  `203.0.113.0/24`, which is in that list.
 
 ## Recording results
 

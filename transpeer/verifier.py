@@ -6,6 +6,7 @@ import logging
 from .config import VERIFY_CONCURRENCY, VERIFY_TIMEOUT
 from .networks.base import Network
 from .peerstore import Peer, PeerStore
+from .ipranges import is_reserved_address
 
 log = logging.getLogger(__name__)
 
@@ -43,6 +44,12 @@ async def verify_peers(store: PeerStore, network: str,
 
     async def _verify_one(peer: Peer):
         async with semaphore:
+            if is_reserved_address(peer.addr):
+                # A gossiped entry may name loopback, RFC 1918 or link-local
+                # space; probing it would turn this node into a scanner of
+                # its own host and LAN. No public peer lives there.
+                await store.mark_dead(peer.network, peer.addr, peer.port)
+                return False
             if network_plugin:
                 alive = await network_plugin.verify_peer(peer.addr, peer.port)
             else:

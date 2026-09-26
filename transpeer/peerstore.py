@@ -774,8 +774,15 @@ class PeerStore:
             return max(1, 86400 - (now - t.last_seen))
 
         if not self.config.bucketed:
-            weights = [recency(t) for t in candidates]
-            picked = random.choices(candidates, weights=weights, k=limit)
+            # Weighted sample without replacement (Efraimidis-Spirakis):
+            # `random.choices` samples with replacement, so an answer held
+            # duplicates and fewer than `limit` distinct transpeers.
+            keyed = sorted(
+                candidates,
+                key=lambda t: random.random() ** (1.0 / recency(t)),
+                reverse=True,
+            )
+            picked = keyed[:limit]
             if self.config.anchor_read:
                 picked = sorted(picked, key=lambda t: t.unfaithful)
             return picked

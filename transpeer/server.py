@@ -42,9 +42,6 @@ class LoadTracker:
         self._requests.append(time.time())
 
     # Kept for backward compat; now just forwards to record_request
-    def record_rate_limit_hit(self):
-        pass  # rate-limit hits are already counted via record_request
-
     def _prune(self, now: float):
         cutoff = now - LOAD_WINDOW_SECS
         while self._requests and self._requests[0] < cutoff:

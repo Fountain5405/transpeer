@@ -113,32 +113,22 @@ def _bytes_to_solution(data: bytes) -> EquixSolution:
     return sol
 
 
-# Benchmarked EquiX solve times (seconds) by difficulty on reference hardware.
-# Used by Shadow-compatible simulated solve to sleep for realistic durations.
-# Linear interpolation between these points.
-_SOLVE_TIME_BENCHMARKS = {
-    1: 0.2,
-    10: 0.83,
-    50: 6.0,
-    100: 4.1,
-    500: 14.0,
-}
+# Simulated solve time. A solution passes the difficulty check with
+# probability about 1/effort, so the expected solve time is linear in
+# effort: effort x (time per candidate solution). The constant is anchored
+# at the reference machine's 4.1 s for effort 100, the value every
+# simulation in docs/manuscript.md ran at. Below one solve's own cost the
+# floor applies. Until 2026-09-26 this was a five-point table (1: 0.2,
+# 10: 0.83, 50: 6.0, 100: 4.1, 500: 14.0) from single noisy benchmarks;
+# it was not monotonic and only its 100-entry was ever exercised by the
+# eclipse experiments (§8.2, handshake PoW, interpolated across it).
+SIM_SOLVE_SECS_PER_EFFORT = 4.1 / 100
+SIM_SOLVE_FLOOR_SECS = 0.2
 
 
 def _estimated_solve_time(effort: int) -> float:
-    """Estimate solve time for a given effort level based on benchmarks."""
-    points = sorted(_SOLVE_TIME_BENCHMARKS.items())
-    if effort <= points[0][0]:
-        return points[0][1]
-    if effort >= points[-1][0]:
-        return points[-1][1] * (effort / points[-1][0])
-    for i in range(len(points) - 1):
-        e0, t0 = points[i]
-        e1, t1 = points[i + 1]
-        if e0 <= effort <= e1:
-            frac = (effort - e0) / (e1 - e0)
-            return t0 + frac * (t1 - t0)
-    return points[-1][1]
+    """Expected solve time for `effort` on the reference machine."""
+    return max(SIM_SOLVE_FLOOR_SECS, SIM_SOLVE_SECS_PER_EFFORT * max(0, effort))
 
 
 # Magic marker for simulated proofs — both solve and verify recognize this
