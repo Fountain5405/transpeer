@@ -74,13 +74,14 @@ def gen_config(num_honest, num_attackers, attacker_fake_peers, difficulty,
     config = {
         "general": {
             "stop_time": f"{stop_time}s",
+            "seed": seed,
             "model_unblocked_syscall_latency": True,
             # Shadow's event ordering between hosts depends on the worker count
             # (measured, manuscript §10), so a run is reproducible only at the
-            # same parallelism. Keep it fixed within an experiment. Note that
-            # `--seed` seeds only the Python layout RNG: `general.seed` is not
-            # written, so Shadow runs on its default seed and the results
-            # header's seed is the layout seed.
+            # same parallelism. Keep it fixed within an experiment. `--seed`
+            # seeds the layout RNG and, since 2026-09-26, `general.seed`;
+            # the committed scale_baseline and attacker_ratio configs
+            # predate that and ran on Shadow's default seed.
             "parallelism": min(SIM_PARALLELISM, max(4, total)),
         },
         "network": {

@@ -171,17 +171,16 @@ relayed by any transpeer without re-solving, and a forged entry costs a
 solve per fake. The proof does not bind the *publisher*, which is why it
 limits spam but not identity (§9.4).
 
-*Implementation note (2026-09-26, code review).* The receiver in
-`transpeer/client.py` verifies a proof only when the entry carries one,
-and at the `effort` the entry itself declares; the local `--difficulty`
-is advertised on `/transpeer` but not required of others. An entry sent
-without a `proof`, or with `effort` 0 or 1, is accepted without any solve.
-The simulated attacker (`sim/attacker.py`) solves a proof per fake at the
-configured difficulty, so no measured cell depended on this, but the
-"one solve per fake" cost above is a property of the specification, not
-of the current code. Enforcing a minimum effort on receipt is a
-one-line change deliberately left out of the review, because the
-defaults are pinned by the existing experiments (Appendix A).
+*Implementation note (2026-09-26).* Until the 2026-09-26 protocol
+commit (§13) the receiver in `transpeer/client.py` verified a proof only
+when the entry carried one, and at the `effort` the entry itself
+declared; the local `--difficulty` was advertised on `/transpeer` but
+not required of others, so an entry sent without a `proof`, or with
+`effort` 0 or 1, was accepted without any solve. The receiver now drops
+an entry without a proof or with `effort` below its own difficulty
+(`--no-pow` disables the check). Every simulation runs honest and
+attacker nodes at one difficulty and the simulated attacker always
+attached a proof, so no measured cell depended on the gap (Appendix A).
 
 ### 3.5 Discovery paths
 
@@ -1209,6 +1208,8 @@ post-rebase values (old to new: `de02f26`→`83b3596`, `b769837`→`d9f09e4`,
 | `f98736a` | attacker_ratio (§8.3), earlier |
 | `0c1ee25` | chain-anchored publication, slices 1–2: blob, Merkle, blob DB, weighting, publisher, aux RPC, blob endpoints (no measurements) |
 | `e6d4493` | chain-anchored publication slice 3 (reader): header verification, share codec, anchor and venue endpoints, weighting and scan-stop by coverage, gossip, faithfulness challenges, observer client and monerod source (no measurements) |
+| `ef613ff`, `af92226` | 2026-09-26 review: remote-input validation, handshake effort ceiling, packaging, runner paths and exit codes, Appendix A corrections (no measurements) |
+| `3ea094a` | 2026-09-26 protocol commit: entry proof enforced at the receiver's difficulty, gossip sample without replacement, linear simulated solve time, no probes into reserved space, production solves off the event loop (no measurements; see Appendix A for which earlier rows it would not reproduce) |
 
 Each experiment folder under `sim/tests/` holds `gen_config.py`,
 `run_experiment.sh`, committed `configs/*.yaml`, a `results*.txt` CSV with
@@ -1303,8 +1304,31 @@ the reserve and native vouchers, no network) and `tests/test_scanner.py`
   receiver accepts entries that carry no proof, and verifies a carried
   proof at the sender's declared effort (0 and 1 always pass). No
   measured result depended on it (the simulated attacker always solved
-  at the configured difficulty), so no table changes; §3.4 now carries
-  the note and the code is unchanged pending a decision on the default.
+  at the configured difficulty), so no table changes. The receiver now
+  enforces the proof at its own difficulty (2026-09-26 protocol commit,
+  §13); §3.4 carries the note.
+- The default policy's `/transpeers` answer was sampled with
+  `random.choices`, i.e. with replacement: an answer could hold the same
+  transpeer several times and fewer than 20 distinct ones. Fixed on
+  2026-09-26 (weighted sample without replacement, recency weights
+  unchanged). Every "current"-policy row in §8 was measured with the
+  duplicate-carrying sample; the bucketed path always deduplicated. The
+  qualitative claims (1 to 3) do not rest on sample size, but a
+  current-policy cell rerun from this commit will not reproduce the
+  earlier numbers exactly. Not rerun.
+- The simulated solve time was a five-point table (1: 0.2 s, 10: 0.83,
+  50: 6.0, 100: 4.1, 500: 14.0) from single benchmarks; it was not
+  monotonic. Solve time is linear in effort in expectation (a candidate
+  passes with probability about 1/effort), so on 2026-09-26 it became
+  4.1 s per 100 effort with a 0.2 s floor. The eclipse experiments only
+  ever used effort 100, which is unchanged. The handshake PoW experiment
+  (§8.2) interpolated across the old table (effort 10 to 1000: old 0.83
+  to 28 s, new 0.41 to 41 s) and cannot be reproduced bit for bit from
+  the new code; its rows stand as measured under the old table.
+- Peers and transpeers named by other transpeers in reserved address
+  space (loopback, RFC 1918, link-local, CGNAT, multicast, documentation)
+  were probed by the verifier and the native probe. They are now marked
+  dead or closed without a probe. No simulated host is in such a range.
 - `sim/gen_scale_test.py` claimed Shadow is deterministic regardless of
   worker count, the opposite of the §10 measurement; the comment is
   corrected. The same generator and `handshake_pow/gen_config.py` never

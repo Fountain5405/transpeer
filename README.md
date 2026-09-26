@@ -8,6 +8,12 @@ Cross compatability, because all you gotta do is write a bash script to dump a d
 
 [A narrative was provided here](https://old.reddit.com/r/Monero/comments/f6y8xn/ccs_idea_maybe_someone_can_write_it_up/)
 
+The shell scripts at the repo root (`main.sh`, `findtranspeer.sh`,
+`networks/*.sh`, ...) are that original bash prototype, kept for the
+record; they reference paths and helpers that no longer exist and are
+not runnable. The protocol lives in the `transpeer` Python package
+(`PROTOCOL.md`, `python -m transpeer --help`).
+
 But basically, we create a common protocol for p2p networks to share their IP lists with each other,
 such that a brute force of IP space is more likely to yield a connection that can provide IP lists of potential peers. 
 

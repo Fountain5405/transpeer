@@ -1,5 +1,11 @@
 # Transpeer handoff — context for a new machine
 
+> Historical (2026-04). Written for the move off the previous machine;
+> the Shadow paths and "next up" list below are out of date. Current
+> contributor invariants are in `CLAUDE.md`, the scientific record in
+> `docs/manuscript.md`, and the live session status (gitignored) in
+> `.claude/HANDOFF.md`.
+
 Use this as the initial prompt when opening Claude Code on a new machine.
 
 ## What this project is

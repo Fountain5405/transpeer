@@ -25,7 +25,10 @@ echo "# Transpeer attacker-ratio experiment" > "$RESULTS"
 echo "# Total hosts: $TOTAL, simulated time: ${STOP_TIME}s, seed: $SEED" >> "$RESULTS"
 echo "# Started: $(date)" >> "$RESULTS"
 echo "" >> "$RESULTS"
-echo "pct,honest,attackers,real_time_sec,peak_mem_mb,honest1_discovered,honest1_peer_store_final" >> "$RESULTS"
+# honest1_peer_entries_received: sum of "Got N peers" lines over the run, i.e.
+# entries honest1 received, not its store size. Rows before 2026-09-26 were
+# labelled honest1_peer_store_final and also summed the "Got N transpeers" lines.
+echo "pct,honest,attackers,real_time_sec,peak_mem_mb,honest1_discovered,honest1_peer_entries_received" >> "$RESULTS"
 
 cd "$TEST_DIR"
 
@@ -86,7 +89,7 @@ for pct in "${PERCENTAGES[@]}"; do
     if [ -f "$HONEST1_LOG" ]; then
         DISCOVERED=$(grep "Discovered transpeer" "$HONEST1_LOG" 2>/dev/null | \
             awk -F"at " '{print $2}' | awk '{print $1}' | sort -u | wc -l)
-        PEERS_TOTAL=$(grep -oP 'Got \K\d+' "$HONEST1_LOG" | awk '{s+=$1} END {print s+0}')
+        PEERS_TOTAL=$(grep -oP 'Got \K\d+(?= peers for)' "$HONEST1_LOG" | awk '{s+=$1} END {print s+0}')
     fi
 
     ATTACKERS=$(echo "scale=0; $TOTAL * $pct / 100" | bc)

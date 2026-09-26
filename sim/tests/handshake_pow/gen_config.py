@@ -28,7 +28,7 @@ RPC_PORT = 10001
 VICTIM_IP = "11.0.0.1"
 
 
-def gen(num_honest, num_flooders, flood_rate, stop_time, solve_pow, scenario_name):
+def gen(num_honest, num_flooders, flood_rate, stop_time, solve_pow, scenario_name, seed=42):
     total = 1 + num_honest + num_flooders
     # IP layout: 11.0.0.1 = victim, 11.0.0.2..N+1 = honest, then flooders
     scan_range = "11.0.0.0/24"
@@ -54,6 +54,9 @@ def gen(num_honest, num_flooders, flood_rate, stop_time, solve_pow, scenario_nam
     config = {
         "general": {
             "stop_time": f"{stop_time}s",
+            # Written since 2026-09-26; the committed handshake_pow configs
+            # predate it and ran on Shadow's default seed.
+            "seed": seed,
             "model_unblocked_syscall_latency": True,
             "parallelism": SIM_PARALLELISM,
         },
@@ -137,12 +140,13 @@ def main():
     parser.add_argument("--solve-pow", action="store_true",
                         help="Flooders actually solve PoW when challenged")
     parser.add_argument("--name", default="scenario")
+    parser.add_argument("--seed", type=int, default=42, help="Shadow general.seed")
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
 
     config, total = gen(
         args.honest, args.flooders, args.flood_rate,
-        args.stop_time, args.solve_pow, args.name,
+        args.stop_time, args.solve_pow, args.name, seed=args.seed,
     )
 
     with open(args.output, "w") as f:
