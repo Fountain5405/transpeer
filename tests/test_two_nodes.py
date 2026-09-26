@@ -11,7 +11,7 @@ from aiohttp import web
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from transpeer.config import Config, PROTOCOL_VERSION
+from transpeer.config import Config
 from transpeer.peerstore import Peer, PeerStore, TranspeerEntry
 from transpeer.server import TranspeerServer
 from transpeer.client import TranspeerClient

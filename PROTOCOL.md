@@ -163,6 +163,26 @@ New networks can be added by implementing the network plugin interface.
 
 Transpeer nodes should rate-limit requests per source IP (default: 60 requests per 60 seconds) to prevent abuse as an amplification vector.
 
+## Extensions Beyond This Document
+
+The reference implementation adds two mechanisms that this v1 text does not
+specify; they are documented here by pointer so the spec is not read as
+complete.
+
+- **Adaptive handshake PoW.** A node under load (more than 300 requests in
+  60 s by default) answers `402` with a JSON challenge (`effort`, `bucket`,
+  `node_id`, `client_ip`) and the headers `X-Transpeer-Required-Effort`,
+  `X-Transpeer-Node-Id`, `X-Transpeer-Client-Ip`. The client retries with
+  `X-Transpeer-PoW: <bucket>:<nonce_b64>:<solution_b64>`. Effort scales
+  with load up to a maximum and drops back to zero when load subsides
+  (`transpeer/server.py`, `transpeer/pow.py`).
+- **Chain-anchored publication.** Endpoints `GET /`, `/blob/{hash}`,
+  `/blobs/index`, `/anchor/{chain}/headers`,
+  `/anchor/{chain}/coinbase/{height}`, `/venues`,
+  `/venue/{id}/share/{share_id}`, `/venue/{id}/shares` and
+  `/venue/{id}/share_by_root/{root}`, all behind flags that default off.
+  Specified in `docs/spec-chain-anchored-publication.md`.
+
 ## Security Considerations
 
 - **Sybil resistance**: IPv4 address scarcity makes it expensive to run many fake transpeers

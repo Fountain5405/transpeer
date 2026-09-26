@@ -6,7 +6,7 @@ the stale-tip rule.
 """
 
 import random
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from .monero import (
     parse_hashing_blob, block_id, check_hash, next_difficulty, seed_height,
@@ -121,7 +121,6 @@ def _check_shape(rows: list, checkpoint: Checkpoint) -> None:
 def _check_linkage(rows: list, checkpoint: Checkpoint):
     heads = []
     ids = []
-    prev = None
     for i, row in enumerate(rows):
         try:
             head = parse_hashing_blob(row.blob)
@@ -132,7 +131,6 @@ def _check_linkage(rows: list, checkpoint: Checkpoint):
             raise HeaderError(f"broken linkage at height {row.height}")
         heads.append(head)
         ids.append(rid)
-        prev = rid
     idx = checkpoint.height - rows[0].height
     if ids[idx] != checkpoint.hash:
         raise HeaderError(f"checkpoint mismatch at height {checkpoint.height}")
@@ -203,7 +201,7 @@ def _check_pow(rows: list, checkpoint: Checkpoint, pow: PowBackend, rng, sample:
 
 
 def verify_headers(rows: list, checkpoint: Checkpoint, pow: PowBackend, now: int,
-                    rng=random.Random(), sample: float = 0.05, recent: int = 720,
+                    rng: random.Random | None = None, sample: float = 0.05, recent: int = 720,
                     seed_hash_for=None, trusted: ChainView | None = None) -> ChainView:
     """Verify `rows` against `checkpoint`. With `trusted`, `rows` must be
     the rows that extend that already-verified view (its tip id is
@@ -212,6 +210,8 @@ def verify_headers(rows: list, checkpoint: Checkpoint, pow: PowBackend, now: int
     view is not modified; the result is a new, extended view."""
     if not rows:
         raise HeaderError("no header rows supplied")
+    if rng is None:
+        rng = random.Random()
     if trusted is not None:
         return _extend(rows, trusted, checkpoint, pow, now, seed_hash_for)
     _check_shape(rows, checkpoint)

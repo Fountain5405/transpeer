@@ -204,7 +204,7 @@ def test_monero_block():
 
 def test_blobdb():
     import tempfile
-    from transpeer.anchor.blob import encode_blob, blob_hash, list_body
+    from transpeer.anchor.blob import encode_blob, blob_hash
     from transpeer.anchor.blobdb import BlobDB, Commitment
     print("blob database")
     db = BlobDB()

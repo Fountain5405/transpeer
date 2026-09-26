@@ -352,9 +352,9 @@ def parse_share(data: bytes, consensus_id: bytes) -> ParsedShare:
                 hi, p = read_varint(t, p)
                 if p != len(t):
                     raise ValueError("trailing bytes in aux data")
-            except ValueError:
+            except ValueError as e:
                 if chain_id == CHAIN_ID:
-                    raise ShareError("transpeer aux data malformed")
+                    raise ShareError("transpeer aux data malformed") from e
                 aux[chain_id] = (b"", 0)
                 continue
             aux[chain_id] = (t[:HASH_SIZE], lo + (hi << 64))

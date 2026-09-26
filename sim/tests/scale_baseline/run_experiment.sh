@@ -105,6 +105,12 @@ for HOSTS in $HOST_COUNTS; do
     STATUS="ok"
     [ "$SHADOW_RC" -ne 0 ] && STATUS="shadow_rc_${SHADOW_RC}"
     grep -q "Shadow completed successfully" "$DATA_DIR.log" 2>/dev/null || STATUS="incomplete"
+    # Shadow's stdout is dominated by per-host heartbeats and scanner-probe
+    # "no host exists" warnings (485 GB over 254 scenarios). Keep the tail:
+    # the completion line above has already been checked.
+    if [ -s "$DATA_DIR.log" ]; then
+        tail -n 300 "$DATA_DIR.log" > "$DATA_DIR.log.tail" && mv "$DATA_DIR.log.tail" "$DATA_DIR.log"
+    fi
 
     # Simulated seconds per real second. Higher is better.
     RATIO=$(awk -v s="$STOP_TIME" -v e="$ELAPSED" 'BEGIN{printf "%.3f", (e>0? s/e : 0)}')

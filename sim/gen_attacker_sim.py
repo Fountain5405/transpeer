@@ -124,6 +124,6 @@ config["hosts"]["attacker"] = {
 with open("shadow_attacker.yaml", "w") as f:
     yaml.dump(config, f, default_flow_style=False, sort_keys=False)
 
-print(f"Generated shadow_attacker.yaml")
+print("Generated shadow_attacker.yaml")
 print(f"  5 honest nodes (11.0.0.1-5) running p2pa + transpeer (difficulty={DIFFICULTY})")
 print(f"  1 attacker (11.0.0.6) generating {ATTACKER_FAKE_PEERS} fake peers with PoW")

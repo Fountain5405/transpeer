@@ -8,7 +8,6 @@ import asyncio
 import os
 
 from transpeer.anchor.p2p import (
-    BLOCK_BROADCAST,
     BLOCK_REQUEST,
     FrameParser,
     HANDSHAKE_CHALLENGE,

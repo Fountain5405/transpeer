@@ -12,15 +12,12 @@ Usage:
 
 import argparse
 import asyncio
-import json
 import logging
 import os
 import random
-import struct
 import sys
 import time
 
-import os
 sys.path.insert(0, os.environ.get(
     "TRANSPEER_DIR",
     os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))

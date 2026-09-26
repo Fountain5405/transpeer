@@ -23,9 +23,10 @@
 # (A1500 vs A500). Five seeds per cell, 15-minute window.
 
 set -u
-cd "$(dirname "${BASH_SOURCE[0]}")/../../.." || exit 1
-export TMPDIR=/fast/tmp
+# Fixed before simenv.sh is sourced so its default (60) does not win.
 export SIM_PARALLELISM="${SIM_PARALLELISM:-30}"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../../simenv.sh"
+cd "$TRANSPEER_DIR" || exit 1
 R=sim/tests/bootstrap_eclipse
 SEEDS="${SEEDS:-1 2 3 4 5}"
 
@@ -34,8 +35,9 @@ run() {
     echo "=== $name start $(date +%H:%M:%S) ==="
     rm -f "$R/results_${name}.txt"
     env RESULTS_FILE="$R/results_${name}.txt" "$@" "./$R/run_experiment.sh" \
-        > "/fast/tmp/eclipse_${name}.log" 2>&1
-    echo "=== $name done $(date +%H:%M:%S) rc=$? cells=$(grep -c '^Done:' "/fast/tmp/eclipse_${name}.log") ==="
+        > "$SIM_DATA_ROOT/eclipse_${name}.log" 2>&1
+    local rc=$?
+    echo "=== $name done $(date +%H:%M:%S) rc=$rc cells=$(grep -c '^Done:' "$SIM_DATA_ROOT/eclipse_${name}.log") ==="
 }
 
 chain_reserve() {
@@ -66,8 +68,8 @@ case "${1:-both}" in
     reserve) chain_reserve ;;
     native) chain_native ;;
     both)
-        chain_reserve > /fast/tmp/eclipse_defenses_reserve.log 2>&1 &
-        chain_native > /fast/tmp/eclipse_defenses_native.log 2>&1 &
+        chain_reserve > "$SIM_DATA_ROOT/eclipse_defenses_reserve.log" 2>&1 &
+        chain_native > "$SIM_DATA_ROOT/eclipse_defenses_native.log" 2>&1 &
         wait
         ;;
     *) echo "usage: $0 [reserve|native|both]" >&2; exit 2 ;;

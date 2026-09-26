@@ -10,9 +10,9 @@ every node). See README.md for the design.
                                             S attacker buckets, dealt round-robin
 
 A /24 holds 254 hosts, so S is raised to the minimum that fits A when the
-requested value is too small. The actual S is printed and written into the
-config as a comment-like key under `general` is not allowed by Shadow, so the
-runner reads it from this script's stdout instead.
+requested value is too small. Shadow rejects unknown keys under `general`, so
+the actual S cannot be recorded in the config; it is printed to stdout and the
+runner reads it from there.
 """
 
 import argparse

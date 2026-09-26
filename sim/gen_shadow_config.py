@@ -13,7 +13,6 @@ NODES_PER_NETWORK = 3
 TOTAL_NODES = NUM_NETWORKS * NODES_PER_NETWORK  # 15
 
 BASE_IP = "11.0.0"
-SCAN_RANGE = f"{BASE_IP}.0/28"  # 14 usable, we have 15 — use /27 for 30
 SCAN_RANGE = f"{BASE_IP}.0/27"  # 30 usable addresses
 
 # Port scheme per network:

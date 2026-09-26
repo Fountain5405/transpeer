@@ -58,7 +58,6 @@ for pct in "${PERCENTAGES[@]}"; do
     # Monitor peak memory during run
     PEAK_MEM=0
     while kill -0 $SHADOW_PID 2>/dev/null; do
-        CUR_MEM=$(ps -o rss= -p $SHADOW_PID 2>/dev/null | tr -d ' ')
         TOTAL_MEM=$(ps -e -o rss= 2>/dev/null | awk '{s+=$1} END {print s}')
         if [ "${TOTAL_MEM:-0}" -gt "$PEAK_MEM" ]; then
             PEAK_MEM=$TOTAL_MEM
@@ -70,6 +69,13 @@ for pct in "${PERCENTAGES[@]}"; do
     END=$(date +%s)
     ELAPSED=$((END - START))
     PEAK_MEM_MB=$((PEAK_MEM / 1024))
+
+    # Shadow's stdout is dominated by per-host heartbeats and scanner-probe
+    # "no host exists" warnings (485 GB over 254 scenarios). Keep the tail:
+    # the completion line above has already been checked.
+    if [ -s "$DATA_DIR.log" ]; then
+        tail -n 300 "$DATA_DIR.log" > "$DATA_DIR.log.tail" && mv "$DATA_DIR.log.tail" "$DATA_DIR.log"
+    fi
 
 
     # Parse results from honest1

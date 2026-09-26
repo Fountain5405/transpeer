@@ -5,7 +5,8 @@ test lives in its own folder with:
 - `gen_config.py` — generates Shadow YAML configs for this test's scenarios
 - `run_experiment.sh` — runs all scenarios sequentially, captures metrics
 - `configs/` — generated Shadow configs (committed so tests are reproducible)
-- `data/` — per-scenario Shadow output (gitignored, too large)
+- per-scenario Shadow output under `$SIM_DATA_ROOT/<test_name>/` (set by
+  `sim/simenv.sh`; never under home, never committed)
 - `results.txt` — CSV summary of each scenario's metrics
 - `README.md` — writeup of what was found
 
@@ -16,7 +17,10 @@ cd sim/tests/<test_name>
 ./run_experiment.sh
 ```
 
-Results are appended to `results.txt` and log output to `run.log`.
+Results are appended to `results.txt`; Shadow's per-scenario output and
+stdout log go under `$SIM_DATA_ROOT/<test_name>/`. Machine-specific paths
+(Shadow binary, interpreter, data root, worker count) come from
+`sim/simenv.sh` and can be overridden from the environment.
 
 ## Test matrix
 
@@ -150,7 +154,9 @@ Results are appended to `results.txt` and log output to `run.log`.
 **Setup**:
 - 50 honest transpeers
 - N attacker transpeers (vary N: 50, 150, 500, 1500)
-- 1 "fresh" honest node that starts late, measures its peer store after 10 min
+- 1 "fresh" honest node that starts late; its peer store is snapshotted
+  through the run (the executed grid ran to 1200 s and beyond, over several
+  policies and seeds; see `bootstrap_eclipse/README.md`)
 - Each attacker serves its own peers; fresh node reaches either real monero peers or attacker fakes
 
 **Expected result**: as attacker count grows, fresh node picks up more attacker IPs. Random scanning provides some uniformity but doesn't fully resist.
@@ -159,7 +165,8 @@ Results are appended to `results.txt` and log output to `run.log`.
 
 **Pass/fail**: report the curve — is there a threshold where attack becomes too effective?
 
-**Status**: pending.
+**Status**: done. Results, the policy grid and the interpretation are in
+`bootstrap_eclipse/README.md` and `docs/manuscript.md`.
 
 ---
 

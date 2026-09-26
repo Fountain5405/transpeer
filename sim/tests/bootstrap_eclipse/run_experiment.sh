@@ -148,6 +148,12 @@ run_scenario() {
     local STATUS="ok"
     [ "$RC" -ne 0 ] && STATUS="shadow_rc_${RC}"
     grep -q "Shadow completed successfully" "$DATA_DIR.log" 2>/dev/null || STATUS="incomplete"
+    # Shadow's stdout is dominated by per-host heartbeats and scanner-probe
+    # "no host exists" warnings (485 GB over 254 scenarios). Keep the tail:
+    # the completion line above has already been checked.
+    if [ -s "$DATA_DIR.log" ]; then
+        tail -n 300 "$DATA_DIR.log" > "$DATA_DIR.log.tail" && mv "$DATA_DIR.log.tail" "$DATA_DIR.log"
+    fi
 
     local METRICS
     METRICS=$("$TRANSPEER_PYTHON" "$TEST_DIR/parse_fresh.py" \

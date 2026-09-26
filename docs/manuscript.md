@@ -171,6 +171,18 @@ relayed by any transpeer without re-solving, and a forged entry costs a
 solve per fake. The proof does not bind the *publisher*, which is why it
 limits spam but not identity (§9.4).
 
+*Implementation note (2026-09-26, code review).* The receiver in
+`transpeer/client.py` verifies a proof only when the entry carries one,
+and at the `effort` the entry itself declares; the local `--difficulty`
+is advertised on `/transpeer` but not required of others. An entry sent
+without a `proof`, or with `effort` 0 or 1, is accepted without any solve.
+The simulated attacker (`sim/attacker.py`) solves a proof per fake at the
+configured difficulty, so no measured cell depended on this, but the
+"one solve per fake" cost above is a property of the specification, not
+of the current code. Enforcing a minimum effort on receipt is a
+one-line change deliberately left out of the review, because the
+defaults are pinned by the existing experiments (Appendix A).
+
 ### 3.5 Discovery paths
 
 Four paths feed a node's transpeer store; the distinction matters in §5.
@@ -1286,3 +1298,22 @@ the reserve and native vouchers, no network) and `tests/test_scanner.py`
   the five-seed files (30 workers) differ from the single-seed files (60
   workers) in the timing-dependent columns. Recorded in §10 with the
   five-seed revision.
+- §3.4 and §3.10 describe the entry proof as a cost every forged entry
+  pays. A 2026-09-26 review of `transpeer/client.py` found that a
+  receiver accepts entries that carry no proof, and verifies a carried
+  proof at the sender's declared effort (0 and 1 always pass). No
+  measured result depended on it (the simulated attacker always solved
+  at the configured difficulty), so no table changes; §3.4 now carries
+  the note and the code is unchanged pending a decision on the default.
+- `sim/gen_scale_test.py` claimed Shadow is deterministic regardless of
+  worker count, the opposite of the §10 measurement; the comment is
+  corrected. The same generator and `handshake_pow/gen_config.py` never
+  write `general.seed`, so the "seed: 42" in the `scale_baseline`,
+  `attacker_ratio` and `handshake_pow` result headers is the Python
+  layout seed and Shadow ran on its default seed. Those experiments
+  have no seed replicas, so no row is affected.
+- `sim/tests/attacker_ratio/run_experiment.sh` labels a column
+  `honest1_peer_store_final`, but the value is the sum of every
+  "Got N peers" and "Got N transpeers" log line over the run: entries
+  received, not a store size. The 2026-04 rows in `results.txt` keep
+  that meaning.

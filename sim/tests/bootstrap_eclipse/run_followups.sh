@@ -12,8 +12,8 @@
 # the policy is the variable.
 
 set -u
-cd "$(dirname "${BASH_SOURCE[0]}")/../../.." || exit 1
-export TMPDIR=/fast/tmp
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../../simenv.sh"
+cd "$TRANSPEER_DIR" || exit 1
 R=sim/tests/bootstrap_eclipse
 
 run() {
@@ -21,8 +21,9 @@ run() {
     echo "=== $name start $(date +%H:%M:%S) ==="
     rm -f "$R/results_${name}.txt"
     env RESULTS_FILE="$R/results_${name}.txt" "$@" "./$R/run_experiment.sh" \
-        > "/fast/tmp/eclipse_${name}.log" 2>&1
-    echo "=== $name done $(date +%H:%M:%S) rc=$? cells=$(grep -c '^Done:' "/fast/tmp/eclipse_${name}.log") ==="
+        > "$SIM_DATA_ROOT/eclipse_${name}.log" 2>&1
+    local rc=$?
+    echo "=== $name done $(date +%H:%M:%S) rc=$rc cells=$(grep -c '^Done:' "$SIM_DATA_ROOT/eclipse_${name}.log") ==="
 }
 
 # 1. Replicas. Both the generator and Shadow take the seed, so each replica

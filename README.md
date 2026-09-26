@@ -123,12 +123,21 @@ header chain) and `anchor_blobs.json` (transpeer-list blobs, shared with
 the publisher) directly under `data_dir`, and per-venue raw shares
 under `data_dir/venues/<hex>/`.
 
-**Tests.** `python tests/test_anchor_read.py` (171 passed),
-`python tests/test_anchor.py` (106 passed),
-`python tests/test_anchor_publish.py` (118 passed),
-`python tests/test_bucketed.py` (47 passed),
-`python tests/test_two_nodes.py` (24 passed),
-`python tests/test_scanner.py` (19 passed).
+**Tests.** Each suite is a plain script; run it from the repo root with
+the venv interpreter (the system `python3` may be too old):
+
+```bash
+PYTHONPATH=$PWD .venv/bin/python tests/test_anchor_read.py     # 190 passed
+PYTHONPATH=$PWD .venv/bin/python tests/test_anchor.py          # 106 passed
+PYTHONPATH=$PWD .venv/bin/python tests/test_anchor_publish.py  # 118 passed
+PYTHONPATH=$PWD .venv/bin/python tests/test_bucketed.py        # 47 passed
+PYTHONPATH=$PWD .venv/bin/python tests/test_two_nodes.py       # 24 passed
+PYTHONPATH=$PWD .venv/bin/python tests/test_scanner.py         # 19 passed
+PYTHONPATH=$PWD .venv/bin/python tests/test_remote_input.py    # 34 passed
+```
+
+Three suites bind fixed loopback ports (17337–17343, 17350–17369 and
+17380), so do not run two copies of the same suite at once.
 
 See
 [docs/spec-chain-anchored-publication.md](docs/spec-chain-anchored-publication.md)

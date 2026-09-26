@@ -75,8 +75,12 @@ def gen_config(num_honest, num_attackers, attacker_fake_peers, difficulty,
         "general": {
             "stop_time": f"{stop_time}s",
             "model_unblocked_syscall_latency": True,
-            # Shadow is deterministic regardless of worker count, so this only
-            # affects wall-clock. Use all configured workers, capped by host count.
+            # Shadow's event ordering between hosts depends on the worker count
+            # (measured, manuscript §10), so a run is reproducible only at the
+            # same parallelism. Keep it fixed within an experiment. Note that
+            # `--seed` seeds only the Python layout RNG: `general.seed` is not
+            # written, so Shadow runs on its default seed and the results
+            # header's seed is the layout seed.
             "parallelism": min(SIM_PARALLELISM, max(4, total)),
         },
         "network": {
@@ -209,7 +213,7 @@ def main():
 
     print(f"Generated {args.output}")
     print(f"  {num_honest} honest + {num_attackers} attackers = {total} total hosts")
-    print(f"  1 Python process per host (static peers, no separate daemons)")
+    print("  1 Python process per host (static peers, no separate daemons)")
     print(f"  Estimated memory: ~{total * 40} MB ({total * 40 / 1024:.1f} GB)")
 
 

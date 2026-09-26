@@ -12,13 +12,14 @@
 # S in {8,16,24,32,48}; chain B is A500 with S in {4,6}, then A1500. Within
 # a chain the stop times run one after another.
 #
-#   ./run_replicas.sh        both chains in parallel, logs in /fast/tmp
+#   ./run_replicas.sh        both chains in parallel, logs under $SIM_DATA_ROOT
 #   ./run_replicas.sh a|b    one chain in the foreground
 
 set -u
-cd "$(dirname "${BASH_SOURCE[0]}")/../../.." || exit 1
-export TMPDIR=/fast/tmp
+# Fixed before simenv.sh is sourced so its default (60) does not win.
 export SIM_PARALLELISM="${SIM_PARALLELISM:-30}"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../../simenv.sh"
+cd "$TRANSPEER_DIR" || exit 1
 R=sim/tests/bootstrap_eclipse
 SEEDS="${SEEDS:-1 2 3 4 5}"
 
@@ -27,8 +28,9 @@ run() {
     echo "=== $name start $(date +%H:%M:%S) ==="
     rm -f "$R/results_${name}_seeds.txt"
     env RESULTS_FILE="$R/results_${name}_seeds.txt" "$@" "./$R/run_experiment.sh" \
-        > "/fast/tmp/eclipse_${name}_seeds.log" 2>&1
-    echo "=== $name done $(date +%H:%M:%S) rc=$? cells=$(grep -c '^Done:' "/fast/tmp/eclipse_${name}_seeds.log") ==="
+        > "$SIM_DATA_ROOT/eclipse_${name}_seeds.log" 2>&1
+    local rc=$?
+    echo "=== $name done $(date +%H:%M:%S) rc=$rc cells=$(grep -c '^Done:' "$SIM_DATA_ROOT/eclipse_${name}_seeds.log") ==="
 }
 
 # Chain A: 200 honest. The 60-minute window carries the headline claim
@@ -60,8 +62,8 @@ case "${1:-both}" in
     a) chain_a ;;
     b) chain_b ;;
     both)
-        chain_a > /fast/tmp/eclipse_replicas_a.log 2>&1 &
-        chain_b > /fast/tmp/eclipse_replicas_b.log 2>&1 &
+        chain_a > "$SIM_DATA_ROOT/eclipse_replicas_a.log" 2>&1 &
+        chain_b > "$SIM_DATA_ROOT/eclipse_replicas_b.log" 2>&1 &
         wait
         ;;
     *) echo "usage: $0 [a|b|both]" >&2; exit 2 ;;

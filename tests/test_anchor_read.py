@@ -240,7 +240,6 @@ def test_share_codec():
     from transpeer.anchor import CHAIN_ID
     from transpeer.anchor.share import (build_share, parse_share, verify_share_pow, mine_share, ShareError,
                                         transpeer_aux, VENUES, MAX_BLOCK_SIZE, MAX_OUTPUT_VALUE)
-    from transpeer.anchor.merkle import verify_merkle_proof, aux_slot, parse_tx_extra_mm_tag
     from transpeer.anchor.powhash import Sha256Pow
     pow = Sha256Pow()
     venue = VENUES["mini"]
@@ -285,7 +284,6 @@ def test_share_codec():
 def test_stores():
     print("anchor and share stores")
     from transpeer.anchor import CHAIN_ID
-    from transpeer.anchor.headers import HeaderRow
     from transpeer.anchor.share import VENUES, parse_share, mine_share
     from transpeer.anchor.powhash import Sha256Pow
     from transpeer.anchor.stores import AnchorStore, ShareStore, venue_dir
@@ -405,7 +403,6 @@ async def test_endpoints_and_client():
     from transpeer.anchor import CHAIN_ID
     from transpeer.anchor.blob import blob_hash, encode_blob
     from transpeer.anchor.blobdb import BlobDB, Commitment
-    from transpeer.anchor.headers import HeaderRow
     from transpeer.anchor.powhash import Sha256Pow
     from transpeer.anchor.share import VENUES, mine_share, parse_share
     from transpeer.anchor.stores import AnchorStore, ShareStore
@@ -835,7 +832,7 @@ async def test_reader_resync():
               "the extension fails and the reader falls back to a full refetch")
         check(st.tip_height == 46, f"reader follows the longer reorganised chain: {st.tip_height}")
         check(reader.anchor.view.id_at(44) == new_44 != old_44,
-              f"the view at the reorg height is the replacement block")
+              "the view at the reorg height is the replacement block")
         check(reader.anchor.view.tip_id == block_id(srv_anchor.headers[46].blob),
               "the reader's tip is the serving node's new tip")
         check(st.bootstrapped, "still bootstrapped after the reorg")
