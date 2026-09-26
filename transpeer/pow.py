@@ -102,9 +102,14 @@ def _solution_to_bytes(sol: EquixSolution) -> bytes:
     return bytes(ctypes.cast(sol.idx, ctypes.POINTER(ctypes.c_uint8 * 16)).contents)
 
 
+EQUIX_SOLUTION_BYTES = 16
+
+
 def _bytes_to_solution(data: bytes) -> EquixSolution:
+    if len(data) != EQUIX_SOLUTION_BYTES:
+        raise ValueError(f"EquiX solution must be {EQUIX_SOLUTION_BYTES} bytes, got {len(data)}")
     sol = EquixSolution()
-    ctypes.memmove(sol.idx, data, 16)
+    ctypes.memmove(sol.idx, data, EQUIX_SOLUTION_BYTES)
     return sol
 
 
@@ -220,7 +225,10 @@ def verify(network: str, addr: str, port: int, nonce: bytes,
         challenge = build_challenge(network, addr, port, timestamp_bucket)
         full_challenge = challenge + nonce
 
-        sol = _bytes_to_solution(solution_bytes)
+        try:
+            sol = _bytes_to_solution(solution_bytes)
+        except ValueError:
+            return False
         result = lib.equix_verify(ctx, full_challenge, len(full_challenge), ctypes.byref(sol))
 
         if result != EQUIX_OK:
@@ -289,7 +297,10 @@ def verify_handshake(client_ip: str, server_node_id: str, nonce: bytes,
     try:
         challenge = build_handshake_challenge(client_ip, server_node_id, bucket)
         full_challenge = challenge + nonce
-        sol = _bytes_to_solution(solution_bytes)
+        try:
+            sol = _bytes_to_solution(solution_bytes)
+        except ValueError:
+            return False
         result = lib.equix_verify(ctx, full_challenge, len(full_challenge), ctypes.byref(sol))
         if result != EQUIX_OK:
             return False

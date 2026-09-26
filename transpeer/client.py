@@ -2,12 +2,13 @@
 
 import asyncio
 import base64
+import ipaddress
 import logging
 import time
 
 import aiohttp
 
-from .config import Config, PROTOCOL_VERSION, TRANSPEER_PORT, user_agent
+from .config import Config, HANDSHAKE_MAX_EFFORT, PROTOCOL_VERSION, TRANSPEER_PORT, user_agent
 from .peerstore import Peer, PeerStore, TranspeerEntry
 from .pow import (
     verify as pow_verify, verify_simulated as pow_verify_sim,
@@ -15,6 +16,44 @@ from .pow import (
 )
 
 log = logging.getLogger(__name__)
+
+# Errors a malformed but syntactically valid JSON body can raise while it is
+# picked apart. They are treated like a bad response, never like a bug.
+_MALFORMED = (ValueError, TypeError, KeyError, AttributeError)
+# A transpeer advertising more networks than this is truncated; every name
+# costs one /peers request per query cycle.
+MAX_NETWORKS_PER_TRANSPEER = 64
+
+
+def _valid_endpoint(addr, port) -> bool:
+    """A remote-supplied address is accepted only as a literal IPv4 address
+    with a usable port. Store keys are `net:addr:port` strings split on
+    ':', so a hostname or an IPv6 literal would corrupt them, and a name
+    would make the verifier resolve DNS on an attacker's behalf."""
+    if not isinstance(addr, str) or isinstance(port, bool) or not isinstance(port, int):
+        return False
+    if not 1 <= port <= 65535:
+        return False
+    try:
+        ipaddress.IPv4Address(addr)
+    except ValueError:
+        return False
+    return True
+
+
+def _clean_networks(value) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    names = [n for n in value if isinstance(n, str) and 0 < len(n) <= 64]
+    return names[:MAX_NETWORKS_PER_TRANSPEER]
+
+
+def _clamp_time(value, now: int) -> int:
+    """Gossiped timestamps are capped at the local clock: a value in the
+    future would never age out and would dominate recency weighting."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        return 0
+    return max(0, min(value, now))
 
 
 class HandshakeProofCache:
@@ -95,6 +134,8 @@ class TranspeerClient:
                 if resp.status == 402:
                     # Handshake PoW required — solve and retry
                     challenge_info = await resp.json()
+                    if not isinstance(challenge_info, dict):
+                        return None
                     effort = challenge_info.get("effort", 0)
                     node_id = challenge_info.get("node_id", "")
                     # Server echoes the IP it saw us at, so we can solve the
@@ -103,7 +144,15 @@ class TranspeerClient:
                         challenge_info.get("client_ip")
                         or resp.headers.get("X-Transpeer-Client-Ip", "")
                     )
-                    if effort <= 0 or not node_id or not client_ip_hint:
+                    if (isinstance(effort, bool) or not isinstance(effort, int)
+                            or effort <= 0 or not isinstance(node_id, str) or not node_id
+                            or not isinstance(client_ip_hint, str) or not client_ip_hint):
+                        return None
+                    if effort > HANDSHAKE_MAX_EFFORT:
+                        # The solve is synchronous; an unbounded effort would
+                        # park the whole node on one remote's say-so.
+                        log.warning("Handshake PoW effort %d demanded by %s exceeds the "
+                                    "ceiling %d; refusing", effort, server_ip, HANDSHAKE_MAX_EFFORT)
                         return None
 
                     log.info("Handshake PoW required by %s: effort=%d", server_ip, effort)
@@ -123,7 +172,7 @@ class TranspeerClient:
                 elif resp.status != 200:
                     return None
                 return await resp.json()
-        except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as e:
+        except (aiohttp.ClientError, asyncio.TimeoutError, *_MALFORMED) as e:
             log.debug("Request to %s failed: %s", url, e)
             return None
 
@@ -139,17 +188,19 @@ class TranspeerClient:
                     if resp.status != 200:
                         return None
                     data = await resp.json()
-                    if data.get("protocol") != PROTOCOL_VERSION:
+                    if not isinstance(data, dict) or data.get("protocol") != PROTOCOL_VERSION:
                         return None
+                    node_id = data.get("node_id", "")
+                    uptime = data.get("uptime", 0)
                     return TranspeerEntry(
                         addr=addr,
                         port=port,
-                        networks=data.get("networks", []),
+                        networks=_clean_networks(data.get("networks", [])),
                         last_seen=int(time.time()),
-                        node_id=data.get("node_id", ""),
-                        uptime=data.get("uptime", 0),
+                        node_id=node_id if isinstance(node_id, str) else "",
+                        uptime=max(0, uptime) if isinstance(uptime, int) and not isinstance(uptime, bool) else 0,
                     )
-        except (aiohttp.ClientError, asyncio.TimeoutError, ValueError):
+        except (aiohttp.ClientError, asyncio.TimeoutError, *_MALFORMED):
             return None
 
     async def fetch_peers(self, addr: str, port: int, network: str) -> list[Peer]:
@@ -161,8 +212,17 @@ class TranspeerClient:
                 if not data:
                     return []
                 peers = []
-                for entry in data.get("peers", []):
-                    peer = Peer.from_dict(network, entry)
+                now = int(time.time())
+                raw = data.get("peers", []) if isinstance(data, dict) else []
+                for entry in raw if isinstance(raw, list) else []:
+                    try:
+                        peer = Peer.from_dict(network, entry)
+                    except _MALFORMED:
+                        # One bad entry must not discard the whole list.
+                        continue
+                    if not _valid_endpoint(peer.addr, peer.port):
+                        continue
+                    peer.last_seen = _clamp_time(peer.last_seen, now)
                     if not self.config.no_pow and peer.nonce and peer.solution:
                         vfn = pow_verify_sim if self.config.sim_pow else pow_verify
                         if not vfn(
@@ -174,7 +234,7 @@ class TranspeerClient:
                             continue
                     peers.append(peer)
                 return peers
-        except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as e:
+        except (aiohttp.ClientError, asyncio.TimeoutError, *_MALFORMED) as e:
             log.debug("Failed to fetch peers from %s:%d: %s", addr, port, e)
             return []
 
@@ -187,15 +247,23 @@ class TranspeerClient:
                 if not data:
                     return []
                 entries = []
-                for item in data.get("transpeers", []):
+                now = int(time.time())
+                raw = data.get("transpeers", []) if isinstance(data, dict) else []
+                for item in raw if isinstance(raw, list) else []:
+                    if not isinstance(item, dict):
+                        continue
+                    tp_addr = item.get("addr")
+                    tp_port = item.get("port", TRANSPEER_PORT)
+                    if not _valid_endpoint(tp_addr, tp_port):
+                        continue
                     entries.append(TranspeerEntry(
-                        addr=item["addr"],
-                        port=item.get("port", TRANSPEER_PORT),
-                        networks=item.get("networks", []),
-                        last_seen=item.get("last_seen", 0),
+                        addr=tp_addr,
+                        port=tp_port,
+                        networks=_clean_networks(item.get("networks", [])),
+                        last_seen=_clamp_time(item.get("last_seen", 0), now),
                     ))
                 return entries
-        except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as e:
+        except (aiohttp.ClientError, asyncio.TimeoutError, *_MALFORMED) as e:
             log.debug("Failed to fetch transpeers from %s:%d: %s", addr, port, e)
             return []
 

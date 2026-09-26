@@ -4,21 +4,24 @@ import base64
 import logging
 import time
 from collections import defaultdict, deque
+from typing import TYPE_CHECKING
 
 from aiohttp import web
 
 from .config import (
     Config, PROTOCOL_VERSION, RATE_LIMIT_REQUESTS, RATE_LIMIT_WINDOW,
-    GOSSIP_SAMPLE_SIZE,
+    GOSSIP_SAMPLE_SIZE, HANDSHAKE_MAX_EFFORT,
 )
 from .peerstore import PeerStore
-from .pow import verify_handshake
+from .pow import HANDSHAKE_BUCKET_SECS, verify_handshake
+
+if TYPE_CHECKING:
+    from .anchor.stores import ShareStore
 
 # Adaptive handshake PoW parameters
 LOAD_WINDOW_SECS = 60  # track request volume over 60s
 LOAD_THRESHOLD = 300  # total requests per window before activating PoW
 HANDSHAKE_MIN_EFFORT = 10
-HANDSHAKE_MAX_EFFORT = 1000
 
 
 class LoadTracker:
@@ -95,11 +98,17 @@ class TranspeerServer:
         now = time.time()
         # Record every request (including rate-limited ones) for load tracking
         self.load_tracker.record_request()
-        timestamps = self._rate_limits[addr]
-        self._rate_limits[addr] = [t for t in timestamps if now - t < RATE_LIMIT_WINDOW]
-        if len(self._rate_limits[addr]) >= RATE_LIMIT_REQUESTS:
+        timestamps = [t for t in self._rate_limits.get(addr, ()) if now - t < RATE_LIMIT_WINDOW]
+        if len(timestamps) >= RATE_LIMIT_REQUESTS:
+            self._rate_limits[addr] = timestamps
             return False
-        self._rate_limits[addr].append(now)
+        timestamps.append(now)
+        self._rate_limits[addr] = timestamps
+        # Drop entries whose window has emptied, otherwise the table keeps one
+        # key per client address for the life of the process.
+        if len(self._rate_limits) > 4 * RATE_LIMIT_REQUESTS:
+            for key in [k for k, ts in self._rate_limits.items() if not ts or now - ts[-1] >= RATE_LIMIT_WINDOW]:
+                del self._rate_limits[key]
         return True
 
     def _check_handshake_pow(self, request: web.Request) -> tuple[bool, int]:
@@ -139,7 +148,7 @@ class TranspeerServer:
             {
                 "error": "handshake PoW required",
                 "effort": required_effort,
-                "bucket": int(time.time()) // 3600,
+                "bucket": int(time.time()) // HANDSHAKE_BUCKET_SECS,
                 "node_id": self.node_id,
                 "client_ip": client_ip,
             },
@@ -185,7 +194,8 @@ class TranspeerServer:
             return web.json_response({"error": "rate limited"}, status=429)
 
         # Record requester as candidate transpeer
-        self.store.add_candidate(remote)
+        if remote:
+            self.store.add_candidate(remote)
 
         networks = self.network_names
         peer_counts = {n: self.store.peer_count(n) for n in networks}

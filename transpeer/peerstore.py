@@ -623,7 +623,10 @@ class PeerStore:
             existing = self._transpeers.get(entry.key)
             if existing:
                 existing.last_seen = max(existing.last_seen, entry.last_seen)
-                existing.uptime = entry.uptime
+                if not gossiped:
+                    # A /transpeers item carries no uptime; letting it write 0
+                    # would exempt the transpeer from faithfulness challenges.
+                    existing.uptime = entry.uptime
                 if entry.networks:
                     existing.networks = entry.networks
                 await self._save_transpeer(existing)

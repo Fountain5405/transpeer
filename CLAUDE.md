@@ -88,7 +88,8 @@ Invariants and traps that have already cost time. Session status lives in
   addresses from inside the test suite, as detached tasks that outlive
   the test. A review caught one such test before it landed.
 - Test suites bind loopback ports: `tests/test_anchor_publish.py`
-  17337–17343, `tests/test_anchor_read.py` 17350–17369. Two concurrent
+  17337–17343, `tests/test_anchor_read.py` 17350–17369,
+  `tests/test_remote_input.py` 17380. Two concurrent
   runs of the same suite collide; new suites take a fresh range.
 - Test fixtures use public-looking addresses (20.x, 203.0.113.x). The
   blob codec rejects reserved ranges (10.x, 127.x), so a 10.x fixture

@@ -45,6 +45,9 @@ MAX_PEERS_PER_NETWORK = 2000  # Cap on peers stored per network
 # Rate limiting
 RATE_LIMIT_REQUESTS = 60  # per IP
 RATE_LIMIT_WINDOW = 60  # seconds
+# Ceiling on the handshake PoW effort a server may demand and a client
+# will solve. A remote value above this is refused, not solved.
+HANDSHAKE_MAX_EFFORT = 1000
 
 
 @dataclass

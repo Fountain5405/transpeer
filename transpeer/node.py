@@ -168,6 +168,7 @@ class Node:
             share_stores=self._share_stores if self.config.anchor_read else None,
         )
 
+        runner = aux_runner = None
         try:
             # Start HTTP server
             app = self.server.create_app()
@@ -208,6 +209,9 @@ class Node:
                   if self.config.anchor_monerod and self.reader is not None else []),
             )
         finally:
+            for r in (aux_runner, runner):
+                if r is not None:
+                    await r.cleanup()
             await self.store.close()
 
     async def _extract_peer_infos(self, name: str, network):
@@ -315,6 +319,9 @@ class Node:
                                             answered=bool(answered))
                 except Exception as e:
                     log.error("Error querying transpeer %s: %s", entry.addr, e)
+                    # Otherwise last_queried stays 0 and the rotation puts
+                    # this entry first every cycle, starving the batch.
+                    self.store.mark_queried(entry.addr, entry.port, answered=False)
 
             await asyncio.gather(*(_query_one(e) for e in batch))
 

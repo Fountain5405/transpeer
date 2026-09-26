@@ -122,7 +122,7 @@ def random_ip_in_cidr(cidr: str) -> str:
     # Skip network and broadcast addresses
     num_hosts = network.num_addresses - 2
     if num_hosts <= 0:
-        return str(network.network_address + 1)
+        return str(network.network_address)
     offset = random.randint(1, num_hosts)
     return str(network.network_address + offset)
 
